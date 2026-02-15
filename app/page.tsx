@@ -13,6 +13,7 @@ export default function Home() {
   const [script, setScript] = useState<string>('');
   const [audioBase64, setAudioBase64] = useState<string>('');
   const [loading, setLoading] = useState(false);
+  const [generatingPodcast, setGeneratingPodcast] = useState(false);
   const [error, setError] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'markdown' | 'script' | 'diagram'>('markdown');
   const mermaidRef = useRef<HTMLDivElement>(null);
@@ -104,6 +105,42 @@ export default function Home() {
     }, 3000);
   };
 
+  const handleGeneratePodcast = async () => {
+    if (!jobId) return;
+    
+    setGeneratingPodcast(true);
+    setError('');
+    setJobStatus('generating_podcast');
+
+    try {
+      const response = await fetch(`/api/jobs/${jobId}/podcast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ podcastStyle }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to generate podcast');
+      }
+
+      setScript(data.script || '');
+      setAudioBase64(data.audioBase64 || '');
+      setJobStatus('completed');
+      
+      // Switch to script tab if podcast was generated
+      if (data.script) {
+        setActiveTab('script');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to generate podcast');
+      setJobStatus('completed'); // Revert to completed status
+    } finally {
+      setGeneratingPodcast(false);
+    }
+  };
+
   const handleDownloadAudio = () => {
     if (!audioBase64) return;
     
@@ -142,6 +179,9 @@ export default function Home() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
+
+  const canGeneratePodcast = jobStatus === 'completed' && markdown && !script && !generatingPodcast;
+  const isGeneratingPodcast = jobStatus === 'generating_podcast' || generatingPodcast;
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-black p-8">
@@ -208,6 +248,61 @@ export default function Home() {
           <div className="mb-6 p-4 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded-lg">
             <p className="font-medium">Job ID: {jobId}</p>
             <p>Status: {jobStatus}</p>
+          </div>
+        )}
+
+        {/* Generate Podcast Button - Only shows when analysis is complete but no podcast yet */}
+        {canGeneratePodcast && (
+          <div className="mb-6 p-6 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+            <div className="flex flex-col gap-4">
+              <div>
+                <h3 className="text-lg font-semibold text-green-800 dark:text-green-400 mb-2">
+                  Analysis Complete!
+                </h3>
+                <p className="text-green-700 dark:text-green-300 text-sm">
+                  Your system design document is ready. Generate a podcast to make it accessible.
+                </p>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+                <div className="flex gap-4 items-center">
+                  <span className="text-sm text-zinc-600 dark:text-zinc-400">Podcast Style:</span>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      value="overview"
+                      checked={podcastStyle === 'overview'}
+                      onChange={(e) => setPodcastStyle(e.target.value as PodcastStyle)}
+                      className="text-green-600"
+                    />
+                    <span className="text-sm text-zinc-700 dark:text-zinc-300">Overview</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      value="technical"
+                      checked={podcastStyle === 'technical'}
+                      onChange={(e) => setPodcastStyle(e.target.value as PodcastStyle)}
+                      className="text-green-600"
+                    />
+                    <span className="text-sm text-zinc-700 dark:text-zinc-300">Technical</span>
+                  </label>
+                </div>
+                <button
+                  onClick={handleGeneratePodcast}
+                  disabled={isGeneratingPodcast}
+                  className="px-6 py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                >
+                  {isGeneratingPodcast ? 'Generating Podcast...' : 'Generate Podcast'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isGeneratingPodcast && (
+          <div className="mb-6 p-4 bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded-lg">
+            <p className="font-medium">Generating podcast...</p>
+            <p className="text-sm">This may take a minute. Using OpenRouter API.</p>
           </div>
         )}
 

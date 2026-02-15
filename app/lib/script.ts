@@ -93,7 +93,7 @@ export async function generatePodcastScript(
         'X-Title': 'Repo to Podcast',
       },
       body: JSON.stringify({
-        model: 'openai/gpt-oss-120b:free',
+        model: 'openai/gpt-oss-20b:free',
         messages,
         max_tokens: 2000,
         temperature: 0.7,

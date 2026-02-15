@@ -59,7 +59,7 @@ export async function POST(request: Request) {
     console.log(`[DEBUG] Job created: ${jobId}, style: ${job.podcastStyle}, total jobs: ${jobStore.getAll().length}`);
 
     // Start background processing
-    processJob(jobId, githubUrl, sandboxName, job.podcastStyle || 'overview').catch((error) => {
+    processJob(jobId, githubUrl, sandboxName).catch((error) => {
       console.error(`Job ${jobId} failed:`, error);
       jobStore.update(jobId, {
         status: 'failed',
@@ -80,11 +80,9 @@ export async function POST(request: Request) {
 async function processJob(
   jobId: string,
   githubUrl: string,
-  sandboxName: string,
-  podcastStyle: PodcastStyle
+  sandboxName: string
 ): Promise<void> {
   let sandbox: SandboxInstance | null = null;
-  const repoName = getRepoName(githubUrl);
 
   try {
     // Update status to cloning
@@ -122,41 +120,11 @@ async function processJob(
 
     console.log(`[${jobId}] Analysis complete, markdown: ${markdown.length} chars`);
 
-    // Save markdown immediately - this is the core deliverable
-    jobStore.update(jobId, {
-      status: 'generating',
-      markdown,
-    });
-
-    // Generate podcast script (optional - doesn't fail the job)
-    let script = '';
-    let audioBase64 = '';
-
-    try {
-      console.log(`[${jobId}] Generating podcast script...`);
-      script = await generatePodcastScript(markdown, podcastStyle, repoName);
-      
-      if (script) {
-        console.log(`[${jobId}] Script generated: ${script.length} chars`);
-        jobStore.update(jobId, { script });
-        
-        // Generate TTS audio from script (optional)
-        console.log(`[${jobId}] Generating TTS audio...`);
-        audioBase64 = await generateTTS(script);
-        console.log(`[${jobId}] TTS audio generated: ${audioBase64.length} base64 chars`);
-      }
-    } catch (audioError) {
-      // Audio generation failed but markdown is saved - this is acceptable
-      console.error(`[${jobId}] Audio generation failed (non-critical):`, audioError);
-      // Continue with partial completion
-    }
-
-    // Update job with all results
+    // Mark job as completed immediately after analysis
+    // Podcast generation is now separate to avoid wasting credits during testing
     jobStore.update(jobId, {
       status: 'completed',
       markdown,
-      script: script || undefined,
-      audioBase64: audioBase64 || undefined,
       analysisMetrics: analysisMetrics || undefined,
     });
 
@@ -185,3 +153,6 @@ async function processJob(
     }
   }
 }
+
+// Export helper functions for podcast generation endpoint
+export { generatePodcastScript, generateTTS, getRepoName };
