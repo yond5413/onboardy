@@ -23,7 +23,8 @@ export async function GET(
       githubUrl: job.githubUrl,
       status: job.status,
       markdown: job.markdown,
-      audioUrl: job.audioUrl,
+      script: job.script,
+      audioBase64: job.audioBase64,
       error: job.error,
       createdAt: job.createdAt.toISOString(),
     });

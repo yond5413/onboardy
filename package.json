@@ -12,6 +12,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.42",
     "@blaxel/core": "^0.2.65",
     "elevenlabs": "^1.59.0",
+    "mermaid": "^11.12.2",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",

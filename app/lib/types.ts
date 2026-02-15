@@ -1,3 +1,6 @@
+import type { PodcastStyle } from './script';
+import type { AnalysisMetrics } from './cost-tracker';
+
 export type JobStatus = 'queued' | 'cloning' | 'analyzing' | 'generating' | 'completed' | 'failed' | 'destroyed';
 
 export interface AnalysisJob {
@@ -5,11 +8,13 @@ export interface AnalysisJob {
   githubUrl: string;
   status: JobStatus;
   sandboxName: string;
+  podcastStyle?: PodcastStyle;
   markdown?: string;
-  audioUrl?: string;
+  script?: string;
   audioBase64?: string;
   error?: string;
   createdAt: Date;
+  analysisMetrics?: AnalysisMetrics;
 }
 
 export interface RepoContext {
