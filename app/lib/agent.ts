@@ -19,33 +19,30 @@ Your expertise includes:
 
 The repository is already available at /repo. Focus on analyzing the existing files.`;
 
-const ANALYSIS_PROMPT = `Analyze the repository at /repo and generate a comprehensive system design document.
+const ANALYSIS_PROMPT = `Analyze the repository at /repo and generate a system design document for onboarding new developers.
 
 ## Task
 
 1. Explore the repository structure at /repo
 2. Read key configuration files (package.json, tsconfig.json, requirements.txt, etc.)
-3. Examine 5-8 important source files to understand implementation
-4. Generate a complete system design document
+3. Examine important source files to understand the implementation
+4. Generate a system design document suitable for a new developer joining the team
 
 ## Output Format
 
-Create a markdown document with these sections ONLY (no JSON):
+Create a concise markdown document focused on helping a new engineer understand the system within their first week.
+
+Output ONLY markdown with these sections:
 
 ### 1. Overview
-- 2-3 paragraphs describing what the system does
-- Primary purpose and problem it solves
-- Key capabilities
+2-3 sentences describing what the system does and its primary purpose.
 
 ### 2. Tech Stack
-List all technologies with versions found in config files
+Bullet list of technologies used (languages, frameworks, databases, key libraries).
 
 ### 3. Architecture
-- High-level architecture pattern
-- Key design principles
-- System boundaries
-
-Include Mermaid diagram:
+Brief description of the high-level architecture pattern.
+Include a Mermaid diagram:
 \`\`\`mermaid
 graph TD
     A[Client] --> B[API/Entry]
@@ -53,33 +50,28 @@ graph TD
     C --> D[Database/Services]
 \`\`\`
 
-### 4. Components
-For each major component:
-- **Name**: Component name
-- **Description**: What it does
-- **Responsibilities**: Key duties
-- **Key Files**: Main files
+### 4. Key Components
+Table format with columns: Name | Purpose | Key Files
+Focus on the most important components (8-12 max).
 
 ### 5. Data Flow
-Describe how data moves through the system
-
-Include Mermaid sequence:
-\`\`\`mermaid
-sequenceDiagram
-    participant User
-    participant API
-    participant Service
-    participant DB
-\`\`\`
+Numbered steps showing how a request moves through the system.
 
 ### 6. Key Design Decisions
-Highlight 2-3 important architectural decisions
+Maximum 3 important architectural decisions with brief explanations.
 
-## Guidelines
-- Be thorough but concise
+### 7. Getting Started
+- How to run the system locally
+- Key files to read first
+- Any setup requirements
+
+## Rules
+- No conversational filler (no "Perfect!", "I've created", etc.)
+- No emojis
+- No introductory summaries before sections
+- Be concise and scannable
+- Use tables where appropriate
 - Use specific file paths (all starting with /repo/)
-- Make diagrams clear and accurate
-- Focus on architecture, not line-by-line code
 - DO NOT attempt to clone or download anything - work only with existing /repo contents
 - Output ONLY markdown - no JSON code blocks`;
 
@@ -124,16 +116,38 @@ Generate ONLY a JSON code block with this exact structure - no markdown text:
 \`\`\`
 
 ## Guidelines for Node Types
-- "client": Frontend/user-facing components
-- "service": Backend services, processors, handlers
-- "database": Data stores (SQL, NoSQL, file storage)
-- "external": Third-party APIs, external services
-- "gateway": API gateways, load balancers
+- "client": Frontend/user-facing components (use purple color)
+- "service": Backend services, processors, handlers (use blue color)
+- "database": Data stores - SQL, NoSQL, file storage (use green color)
+- "external": Third-party APIs, external services (use orange color)
+- "gateway": API gateways, load balancers (use red color)
+
+## Guidelines for Aesthetics (Important for New Developers)
+The diagrams should be aesthetically pleasing and easy to understand for a new developer joining the team.
+
+### Architecture Diagram (12-15 nodes max)
+- Use consistent horizontal spacing: 150-200px between nodes
+- Use consistent vertical spacing: 80-120px between nodes
+- Arrange nodes in left-to-right flow: inputs → processing → outputs
+- Group related components vertically (e.g., all services together, all databases together)
+- Position: start from left (client/frontend) → middle (services) → right (data stores/external)
+- Keep the diagram compact and scannable
+
+### Data Flow Diagram (8-10 nodes max)
+- Show sequential steps from left to right
+- Each node should clearly represent a step in processing
+- Use animated edges to show direction of data flow
+
+### General Guidelines
+- Edge labels should be short and clear
+- Use consistent naming conventions for node IDs
+- Include a legend or use clear node types that explain themselves
+- Make it visually balanced - not too crowded, not too sparse
 
 ## Guidelines
 - Output ONLY the JSON - no explanatory text
-- Include 10-20 nodes for architecture diagram
-- Include 8-12 nodes for data flow diagram
+- Include maximum 15 nodes for architecture diagram
+- Include maximum 10 nodes for data flow diagram
 - Position nodes logically (left to right flow)
 - Use meaningful IDs that describe the component
 - Edge labels should describe the relationship`;

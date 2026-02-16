@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
+    "dev:turbo": "next dev --turbo",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -14,7 +15,7 @@
     "@xyflow/react": "^12.10.0",
     "elevenlabs": "^1.59.0",
     "mermaid": "^11.12.2",
-    "next": "16.1.6",
+    "next": "^16.0.11",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "uuid": "^13.0.0"
