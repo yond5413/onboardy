@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { jobStore } from '@/app/lib/jobs';
 import { createAnalysisSandbox, pauseSandbox, cloneRepoToSandbox, collectAnalysisContext } from '@/app/lib/blaxel';
 import type { SandboxInstance } from '@blaxel/core';
-import { analyzeRepoWithAgent } from '@/app/lib/agent';
+import { analyzeRepoWithAgent, generateDiagramWithAgent, type DiagramResult } from '@/app/lib/agent';
 import { generateTTS } from '@/app/lib/elevenlabs';
 import { generatePodcastScript, type PodcastStyle } from '@/app/lib/script';
 import type { AnalysisJob, AnalysisContext, ReactFlowData } from '@/app/lib/types';
@@ -17,39 +17,6 @@ function generateId(): string {
 }
 
 // Extract structured JSON from markdown response
-interface ExtractedData {
-  patterns?: {
-    framework?: string;
-    architecture?: string;
-    keyModules?: string[];
-  };
-  reactFlowData?: ReactFlowData;
-}
-
-function extractStructuredData(markdown: string): ExtractedData {
-  const result: ExtractedData = {};
-  
-  try {
-    // Find JSON code block at end of markdown
-    const jsonMatch = markdown.match(/```json\n([\s\S]*?)\n```/);
-    if (jsonMatch && jsonMatch[1]) {
-      const parsed = JSON.parse(jsonMatch[1]);
-      
-      if (parsed.patterns) {
-        result.patterns = parsed.patterns;
-      }
-      
-      if (parsed.reactFlowData) {
-        result.reactFlowData = parsed.reactFlowData;
-      }
-    }
-  } catch (error) {
-    console.error('[Extract] Failed to parse structured data:', error);
-  }
-  
-  return result;
-}
-
 // Extract repo name from GitHub URL
 function getRepoName(githubUrl: string): string {
   const match = githubUrl.match(/github\.com\/([^\/]+\/[^\/]+)/);
@@ -139,8 +106,7 @@ async function processJob(
     // Update status to analyzing
     jobStore.update(jobId, { status: 'analyzing' });
 
-    // Run analysis with Claude Haiku 4.5
-    // Note: Repo is already cloned at /repo, so githubUrl not passed to agent
+    // Step 1: Generate clean markdown system design document
     const result = await analyzeRepoWithAgent(
       sandbox,
       jobId,
@@ -154,7 +120,28 @@ async function processJob(
 
     console.log(`[${jobId}] Analysis complete, markdown: ${markdown.length} chars`);
 
-    // Collect analysis context from sandbox
+    // Step 2: Generate React Flow diagram data (separate call)
+    let diagramResult: DiagramResult | undefined;
+    let reactFlowData: ReactFlowData | undefined;
+    try {
+      diagramResult = await generateDiagramWithAgent(
+        sandbox,
+        jobId,
+        (progress) => {
+          console.log(`[${jobId}] ${progress}`);
+        }
+      );
+      
+      if (diagramResult.reactFlowData) {
+        reactFlowData = diagramResult.reactFlowData;
+        console.log(`[${jobId}] Generated reactFlowData`);
+      }
+    } catch (diagramError) {
+      console.error(`[${jobId}] Failed to generate diagram:`, diagramError);
+      // Continue without diagram - not a fatal error
+    }
+
+    // Collect analysis context from sandbox (for file structure)
     let analysisContext: AnalysisContext | undefined;
     try {
       analysisContext = await collectAnalysisContext(sandbox, githubUrl);
@@ -166,28 +153,29 @@ async function processJob(
       // Continue without context - not a fatal error
     }
 
-    // Extract structured data (patterns + reactFlow) from markdown
-    const extracted = extractStructuredData(markdown);
-    console.log(`[${jobId}] Extracted patterns:`, extracted.patterns);
-    console.log(`[${jobId}] Extracted reactFlowData:`, !!extracted.reactFlowData);
-
-    // Merge extracted patterns into analysisContext
-    if (extracted.patterns && analysisContext) {
+    // Use patterns from diagram generation (if available) or fallback to context
+    if (diagramResult?.patterns && analysisContext) {
       analysisContext.patterns = {
-        framework: extracted.patterns.framework || 'Unknown',
-        architecture: extracted.patterns.architecture || 'Unknown',
-        keyModules: extracted.patterns.keyModules || [],
+        framework: diagramResult.patterns.framework || 'Unknown',
+        architecture: diagramResult.patterns.architecture || 'Unknown',
+        keyModules: diagramResult.patterns.keyModules || [],
+      };
+    } else if (analysisContext) {
+      // Keep the basic patterns from collectAnalysisContext
+      analysisContext.patterns = analysisContext.patterns || {
+        framework: 'Unknown',
+        architecture: 'Unknown',
+        keyModules: [],
       };
     }
 
-    // Mark job as completed immediately after analysis
-    // Podcast generation is now separate to avoid wasting credits during testing
+    // Mark job as completed
     jobStore.update(jobId, {
       status: 'completed',
       markdown,
       analysisMetrics: analysisMetrics || undefined,
       analysisContext,
-      reactFlowData: extracted.reactFlowData,
+      reactFlowData,
     });
 
     console.log(`[${jobId}] Job completed successfully`);

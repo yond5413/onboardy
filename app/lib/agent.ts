@@ -30,7 +30,7 @@ const ANALYSIS_PROMPT = `Analyze the repository at /repo and generate a comprehe
 
 ## Output Format
 
-Create a markdown document with these sections:
+Create a markdown document with these sections ONLY (no JSON):
 
 ### 1. Overview
 - 2-3 paragraphs describing what the system does
@@ -75,9 +75,25 @@ sequenceDiagram
 ### 6. Key Design Decisions
 Highlight 2-3 important architectural decisions
 
-## REQUIRED: Structured JSON Output
+## Guidelines
+- Be thorough but concise
+- Use specific file paths (all starting with /repo/)
+- Make diagrams clear and accurate
+- Focus on architecture, not line-by-line code
+- DO NOT attempt to clone or download anything - work only with existing /repo contents
+- Output ONLY markdown - no JSON code blocks`;
 
-At the END of your response, include a JSON code block with this exact structure (do not include any other text after the JSON):
+const DIAGRAM_PROMPT = `Analyze the repository at /repo and generate ONLY a JSON structure for React Flow diagrams.
+
+## Task
+
+1. Explore the repository structure at /repo to understand the architecture
+2. Identify key components, services, databases, and external integrations
+3. Understand the data flow through the system
+
+## Output Format
+
+Generate ONLY a JSON code block with this exact structure - no markdown text:
 
 \`\`\`json
 {
@@ -107,18 +123,65 @@ At the END of your response, include a JSON code block with this exact structure
 }
 \`\`\`
 
+## Guidelines for Node Types
+- "client": Frontend/user-facing components
+- "service": Backend services, processors, handlers
+- "database": Data stores (SQL, NoSQL, file storage)
+- "external": Third-party APIs, external services
+- "gateway": API gateways, load balancers
+
 ## Guidelines
-- Be thorough but concise
-- Use specific file paths (all starting with /repo/)
-- Make diagrams clear and accurate
-- Focus on architecture, not line-by-line code
-- DO NOT attempt to clone or download anything - work only with existing /repo contents
-- The JSON at the end is REQUIRED - do not skip it`;
+- Output ONLY the JSON - no explanatory text
+- Include 10-20 nodes for architecture diagram
+- Include 8-12 nodes for data flow diagram
+- Position nodes logically (left to right flow)
+- Use meaningful IDs that describe the component
+- Edge labels should describe the relationship`;
 
 const HAIKU_MODEL = 'claude-haiku-4-5';
 
 export interface AnalysisResult {
   markdown: string;
+  metrics: AnalysisMetrics;
+}
+
+export interface DiagramResult {
+  patterns: {
+    framework: string;
+    architecture: string;
+    keyModules: string[];
+  };
+  reactFlowData: {
+    architecture: {
+      nodes: Array<{
+        id: string;
+        type: string;
+        position: { x: number; y: number };
+        data: { label: string; description: string };
+      }>;
+      edges: Array<{
+        id: string;
+        source: string;
+        target: string;
+        label?: string;
+      }>;
+    };
+    dataFlow: {
+      nodes: Array<{
+        id: string;
+        type: string;
+        position: { x: number; y: number };
+        data: { label: string; description: string };
+      }>;
+      edges: Array<{
+        id: string;
+        source: string;
+        target: string;
+        label?: string;
+        animated?: boolean;
+      }>;
+    };
+  };
   metrics: AnalysisMetrics;
 }
 
@@ -204,6 +267,100 @@ export async function analyzeRepoWithAgent(
 
   return {
     markdown: finalResult,
+    metrics,
+  };
+}
+
+/**
+ * Generate React Flow diagram data using Claude Haiku 4.5
+ * Outputs structured JSON for architecture and data flow diagrams
+ * 
+ * GUARDRAIL: Repo is pre-cloned in sandbox. Agent only uses Read/Glob/Grep tools.
+ */
+export async function generateDiagramWithAgent(
+  sandbox: SandboxInstance,
+  jobId: string,
+  onProgress?: (message: string) => void
+): Promise<DiagramResult> {
+  const apiKey = process.env.BL_API_KEY;
+  if (!apiKey) {
+    throw new Error('BL_API_KEY environment variable is required');
+  }
+
+  const mcpUrl = `${sandbox.metadata?.url}/mcp`;
+  const metrics = createMetrics(jobId);
+  
+  let rawOutput = '';
+  let jsonStr = '';
+
+  onProgress?.('Generating diagram data with Claude Haiku 4.5...');
+
+  for await (const message of query({
+    prompt: DIAGRAM_PROMPT,
+    options: {
+      model: HAIKU_MODEL,
+      systemPrompt: SYSTEM_PROMPT,
+      mcpServers: {
+        sandbox: {
+          type: 'http',
+          url: mcpUrl,
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+          },
+        },
+      },
+      tools: [],
+      allowedTools: [],
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+    },
+  })) {
+    if (message.type === 'assistant' && message.message?.content) {
+      for (const block of message.message.content) {
+        if ('text' in block) {
+          rawOutput += block.text;
+          if (onProgress) {
+            onProgress(block.text.substring(0, 100));
+          }
+        } else if ('name' in block) {
+          if (onProgress) {
+            onProgress(`[Tool: ${block.name}]`);
+          }
+        }
+      }
+    } else if (message.type === 'result' && message.subtype === 'success') {
+      jsonStr = (message as { result?: string }).result || '';
+    }
+  }
+
+  // Extract JSON from response
+  let diagramData: DiagramResult;
+  try {
+    const jsonMatch = jsonStr.match(/```json\n([\s\S]*?)\n```/);
+    if (jsonMatch && jsonMatch[1]) {
+      diagramData = JSON.parse(jsonMatch[1]);
+    } else {
+      // Try parsing the whole response
+      diagramData = JSON.parse(jsonStr);
+    }
+  } catch (parseError) {
+    console.error('[Diagram] Failed to parse JSON:', parseError);
+    console.log('[Diagram] Raw response:', jsonStr.substring(0, 500));
+    throw new Error('Failed to generate diagram data - invalid JSON response');
+  }
+
+  // Track metrics
+  updatePhase1Metrics(
+    metrics,
+    DIAGRAM_PROMPT,
+    rawOutput
+  );
+  finalizeMetrics(metrics);
+
+  console.log('[Diagram] Generated diagram data successfully');
+
+  return {
+    ...diagramData,
     metrics,
   };
 }
