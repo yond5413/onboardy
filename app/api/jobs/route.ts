@@ -23,6 +23,49 @@ function getRepoName(githubUrl: string): string {
   return match ? match[1] : 'repository';
 }
 
+// Strip conversational filler from Haiku output
+function cleanMarkdown(markdown: string): string {
+  let cleaned = markdown;
+
+  // Remove leading conversational phrases
+  const leadingPatterns = [
+    /^Here's\s+(the\s+)?/i,
+    /^Sure[,.]?\s*/i,
+    /^Let me\s+/i,
+    /^Certainly[,.]?\s*/i,
+    /^Of course[,.]?\s*/i,
+    /^Here's a (brief |quick )?/i,
+    /^Below is\s+/i,
+    /^Below you'll find\s+/i,
+  ];
+
+  for (const pattern of leadingPatterns) {
+    cleaned = cleaned.replace(pattern, '');
+  }
+
+  // Remove trailing conversational phrases
+  const trailingPatterns = [
+    /Let me know if you have any questions[.,]?\s*$/i,
+    /Hope this helps[.,]?\s*$/i,
+    /Let me know if you'd like me to elaborate[.,]?\s*$/i,
+    /Feel free to ask if you need more details[.,]?\s*$/i,
+    /Let me know if you need anything else[.,]?\s*$/i,
+    /Please let me know if you have any questions[.,]?\s*$/i,
+  ];
+
+  for (const pattern of trailingPatterns) {
+    cleaned = cleaned.replace(pattern, '');
+  }
+
+  // Strip excessive newlines (more than 2 consecutive → max 2)
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+  // Trim whitespace
+  cleaned = cleaned.trim();
+
+  return cleaned;
+}
+
 export async function POST(request: Request) {
   try {
     const { githubUrl, podcastStyle } = await request.json();
@@ -115,7 +158,7 @@ async function processJob(
       }
     );
     
-    const markdown = result.markdown;
+    const markdown = cleanMarkdown(result.markdown);
     const analysisMetrics = result.metrics;
 
     console.log(`[${jobId}] Analysis complete, markdown: ${markdown.length} chars`);
