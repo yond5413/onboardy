@@ -6,6 +6,7 @@ import type { PodcastStyle } from './lib/script';
 import { AnalysisContextViewer } from './components/AnalysisContextViewer';
 import { SandboxExplorer } from './components/SandboxExplorer';
 import { ArchitectureDiagram } from './components/ArchitectureDiagram';
+import { MarkdownRenderer } from './components/MarkdownRenderer';
 
 // Types for AnalysisContext
 interface SourceFile {
@@ -524,9 +525,7 @@ export default function Home() {
                       Download Markdown
                     </button>
                   </div>
-                  <pre className="whitespace-pre-wrap font-mono text-sm text-zinc-800 dark:text-zinc-200 overflow-x-auto">
-                    {markdown}
-                  </pre>
+                  <MarkdownRenderer content={markdown} />
                 </div>
               )}
 

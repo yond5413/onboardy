@@ -51,29 +51,59 @@ graph TD
 \`\`\`
 
 ### 4. Key Components
-Table format with columns: Name | Purpose | Key Files
-Focus on the most important components (8-12 max).
+CRITICAL: MUST use proper markdown table format with pipes and dashes.
+
+Format:
+| Name | Purpose | Key Files |
+|------|---------|-----------|
+| ComponentName | Brief one-line description | /repo/path/to/file.ts |
+| AnotherComponent | What it does | /repo/path/to/another.ts |
+
+Requirements:
+- Exactly 3 columns: Name, Purpose, Key Files
+- Use proper markdown table syntax with | separators
+- Include header separator line with dashes
+- 8-12 components maximum
+- Key Files column must contain specific paths starting with /repo/
+- Each row on its own line
 
 ### 5. Data Flow
-Numbered steps showing how a request moves through the system.
+Numbered steps (1, 2, 3...) showing how a request moves through the system.
+Each step should be one sentence explaining what happens.
 
 ### 6. Key Design Decisions
-Maximum 3 important architectural decisions with brief explanations.
+List exactly 3 important architectural decisions.
+
+Format:
+1. **Decision Name**: Brief explanation of why this choice was made and its impact.
+2. **Decision Name**: Brief explanation...
+3. **Decision Name**: Brief explanation...
 
 ### 7. Getting Started
-- How to run the system locally
-- Key files to read first
-- Any setup requirements
+
+#### Prerequisites
+List any required software, versions, or accounts needed.
+
+#### Installation
+Step-by-step commands to set up the project locally.
+
+#### Key Files to Read First
+Ordered list of the most important files a new developer should read:
+1. /repo/path/to/file.ts - Why it's important
+2. /repo/path/to/another.ts - Why it's important
+3. etc.
 
 ## Rules
 - No conversational filler (no "Perfect!", "I've created", etc.)
 - No emojis
 - No introductory summaries before sections
 - Be concise and scannable
-- Use tables where appropriate
+- Use tables where appropriate (especially Key Components)
 - Use specific file paths (all starting with /repo/)
 - DO NOT attempt to clone or download anything - work only with existing /repo contents
-- Output ONLY markdown - no JSON code blocks`;
+- Output ONLY markdown - no JSON code blocks
+- ENSURE all markdown tables use proper syntax with | separators and header rows`;
+
 
 const DIAGRAM_PROMPT = `Analyze the repository at /repo and generate ONLY a JSON structure for React Flow diagrams.
 
