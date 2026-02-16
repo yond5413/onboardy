@@ -16,6 +16,57 @@ export async function destroySandbox(sandbox: SandboxInstance) {
 }
 
 /**
+ * Mark a sandbox as paused in the job record
+ * Note: Blaxel sandboxes automatically go to standby after inactivity
+ * They resume automatically when accessed, so we just track the state
+ */
+export async function pauseSandbox(sandbox: SandboxInstance): Promise<string> {
+  // Blaxel sandboxes auto-suspend after ~5 seconds of inactivity
+  // We just need to return the sandbox name for tracking
+  const sandboxName = (sandbox as unknown as { name?: string }).name || 'unknown';
+  console.log(`[Sandbox] Marked as paused (auto-suspend): ${sandboxName}`);
+  return sandboxName;
+}
+
+/**
+ * Resume a sandbox by name
+ * Blaxel sandboxes automatically resume from standby when accessed
+ */
+export async function resumeSandbox(sandboxName: string): Promise<SandboxInstance> {
+  try {
+    // Getting the sandbox will automatically resume it from standby
+    const sandbox = await SandboxInstance.get(sandboxName);
+    if (!sandbox) {
+      throw new Error(`Sandbox ${sandboxName} not found`);
+    }
+    console.log(`[Sandbox] Resumed from standby: ${sandboxName}`);
+    return sandbox;
+  } catch (error) {
+    console.error(`[Sandbox] Failed to resume sandbox ${sandboxName}:`, error);
+    throw new Error(`Failed to resume sandbox: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+/**
+ * Delete a sandbox permanently
+ * This is a manual cleanup operation, distinct from the automatic destroy
+ */
+export async function deleteSandbox(sandboxName: string): Promise<void> {
+  try {
+    // Get the sandbox instance first
+    const sandbox = await SandboxInstance.get(sandboxName);
+    if (!sandbox) {
+      throw new Error(`Sandbox ${sandboxName} not found`);
+    }
+    await sandbox.delete();
+    console.log(`[Sandbox] Deleted sandbox: ${sandboxName}`);
+  } catch (error) {
+    console.error(`[Sandbox] Failed to delete sandbox ${sandboxName}:`, error);
+    throw new Error(`Failed to delete sandbox: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
+/**
  * Clone a GitHub repository into the sandbox at /repo
  * This ensures repos are always cloned in the isolated sandbox environment
  * rather than on the local filesystem
@@ -161,4 +212,104 @@ export function validateSandboxIsolation(): void {
   // This can be expanded to add runtime checks
   // For now, the tool restriction in agent configuration is the primary guardrail
   console.log('[Guardrails] Sandbox isolation validated - using MCP tools only');
+}
+
+/**
+ * Collect analysis context from the sandbox
+ * Reads the .analysis-context.json file if it exists, or generates context from repo
+ */
+export async function collectAnalysisContext(
+  sandbox: SandboxInstance,
+  githubUrl: string
+): Promise<import('./types').AnalysisContext | undefined> {
+  try {
+    // Try to read the analysis context file if it exists
+    const contextResult = await sandbox.process.exec({
+      command: 'cat /repo/.analysis-context.json 2>/dev/null || echo "{}"',
+      timeout: 10000,
+    });
+
+    if (contextResult.exitCode === 0 && contextResult.stdout) {
+      const contextData = JSON.parse(contextResult.stdout);
+      if (Object.keys(contextData).length > 0) {
+        console.log('[AnalysisContext] Loaded from .analysis-context.json');
+        return contextData as import('./types').AnalysisContext;
+      }
+    }
+
+    // If no context file, generate basic context from repo structure
+    console.log('[AnalysisContext] Generating from repo structure...');
+    
+    // Get root files and directories
+    const structureResult = await sandbox.process.exec({
+      command: 'ls -la /repo 2>/dev/null | tail -n +4',
+      timeout: 5000,
+    });
+
+    const rootFiles: string[] = [];
+    const directories: string[] = [];
+    
+    if (structureResult.exitCode === 0 && structureResult.stdout) {
+      structureResult.stdout.split('\n').forEach((line: string) => {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 9) {
+          const name = parts[parts.length - 1];
+          if (line.startsWith('d')) {
+            directories.push(name);
+          } else if (!name.startsWith('.')) {
+            rootFiles.push(name);
+          }
+        }
+      });
+    }
+
+    // Find entry points (common patterns)
+    const entryPoints: string[] = [];
+    const entryPointResult = await sandbox.process.exec({
+      command: 'find /repo -maxdepth 2 -type f \( -name "index.*" -o -name "main.*" -o -name "app.*" -o -name "server.*" \) 2>/dev/null | head -20',
+      timeout: 5000,
+    });
+    
+    if (entryPointResult.exitCode === 0 && entryPointResult.stdout) {
+      entryPoints.push(...entryPointResult.stdout.split('\n').filter(Boolean));
+    }
+
+    // Collect config files
+    const configFiles: Record<string, { content: string; keyDeps?: string[] }> = {};
+    const configPatterns = ['package.json', 'tsconfig.json', 'requirements.txt', 'Cargo.toml', 'go.mod', 'pom.xml', 'build.gradle', 'Dockerfile'];
+    
+    for (const configFile of configPatterns) {
+      const configResult = await sandbox.process.exec({
+        command: `cat /repo/${configFile} 2>/dev/null || echo ""`,
+        timeout: 5000,
+      });
+      
+      if (configResult.exitCode === 0 && configResult.stdout && configResult.stdout.trim()) {
+        configFiles[configFile] = { content: configResult.stdout };
+      }
+    }
+
+    const context: import('./types').AnalysisContext = {
+      repositoryUrl: githubUrl,
+      collectedAt: new Date().toISOString(),
+      structure: {
+        rootFiles,
+        directories,
+        entryPoints,
+      },
+      configFiles,
+      sourceFiles: [],
+      patterns: {
+        framework: 'Unknown',
+        architecture: 'Unknown',
+        keyModules: [],
+      },
+    };
+
+    console.log('[AnalysisContext] Generated basic context');
+    return context;
+  } catch (error) {
+    console.error('[AnalysisContext] Failed to collect:', error);
+    return undefined;
+  }
 }

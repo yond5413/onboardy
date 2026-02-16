@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server';
 import { jobStore } from '@/app/lib/jobs';
-import { createAnalysisSandbox, destroySandbox, cloneRepoToSandbox } from '@/app/lib/blaxel';
+import { createAnalysisSandbox, pauseSandbox, cloneRepoToSandbox, collectAnalysisContext } from '@/app/lib/blaxel';
 import type { SandboxInstance } from '@blaxel/core';
 import { analyzeRepoWithAgent } from '@/app/lib/agent';
 import { generateTTS } from '@/app/lib/elevenlabs';
 import { generatePodcastScript, type PodcastStyle } from '@/app/lib/script';
-import type { AnalysisJob } from '@/app/lib/types';
+import type { AnalysisJob, AnalysisContext, ReactFlowData } from '@/app/lib/types';
 
 // Simple UUID generator if crypto.randomUUID not available
 function generateId(): string {
@@ -14,6 +14,40 @@ function generateId(): string {
   }
   return Math.random().toString(36).substring(2, 15) + 
          Math.random().toString(36).substring(2, 15);
+}
+
+// Extract structured JSON from markdown response
+interface ExtractedData {
+  patterns?: {
+    framework?: string;
+    architecture?: string;
+    keyModules?: string[];
+  };
+  reactFlowData?: ReactFlowData;
+}
+
+function extractStructuredData(markdown: string): ExtractedData {
+  const result: ExtractedData = {};
+  
+  try {
+    // Find JSON code block at end of markdown
+    const jsonMatch = markdown.match(/```json\n([\s\S]*?)\n```/);
+    if (jsonMatch && jsonMatch[1]) {
+      const parsed = JSON.parse(jsonMatch[1]);
+      
+      if (parsed.patterns) {
+        result.patterns = parsed.patterns;
+      }
+      
+      if (parsed.reactFlowData) {
+        result.reactFlowData = parsed.reactFlowData;
+      }
+    }
+  } catch (error) {
+    console.error('[Extract] Failed to parse structured data:', error);
+  }
+  
+  return result;
 }
 
 // Extract repo name from GitHub URL
@@ -120,12 +154,40 @@ async function processJob(
 
     console.log(`[${jobId}] Analysis complete, markdown: ${markdown.length} chars`);
 
+    // Collect analysis context from sandbox
+    let analysisContext: AnalysisContext | undefined;
+    try {
+      analysisContext = await collectAnalysisContext(sandbox, githubUrl);
+      if (analysisContext) {
+        console.log(`[${jobId}] Collected analysis context`);
+      }
+    } catch (contextError) {
+      console.error(`[${jobId}] Failed to collect analysis context:`, contextError);
+      // Continue without context - not a fatal error
+    }
+
+    // Extract structured data (patterns + reactFlow) from markdown
+    const extracted = extractStructuredData(markdown);
+    console.log(`[${jobId}] Extracted patterns:`, extracted.patterns);
+    console.log(`[${jobId}] Extracted reactFlowData:`, !!extracted.reactFlowData);
+
+    // Merge extracted patterns into analysisContext
+    if (extracted.patterns && analysisContext) {
+      analysisContext.patterns = {
+        framework: extracted.patterns.framework || 'Unknown',
+        architecture: extracted.patterns.architecture || 'Unknown',
+        keyModules: extracted.patterns.keyModules || [],
+      };
+    }
+
     // Mark job as completed immediately after analysis
     // Podcast generation is now separate to avoid wasting credits during testing
     jobStore.update(jobId, {
       status: 'completed',
       markdown,
       analysisMetrics: analysisMetrics || undefined,
+      analysisContext,
+      reactFlowData: extracted.reactFlowData,
     });
 
     console.log(`[${jobId}] Job completed successfully`);
@@ -142,13 +204,14 @@ async function processJob(
       error: errorMessage,
     });
   } finally {
-    // Cleanup sandbox
+    // Pause sandbox instead of destroying to preserve state for exploration
     if (sandbox) {
       try {
-        await destroySandbox(sandbox);
-        console.log(`[${jobId}] Destroyed sandbox: ${sandboxName}`);
+        await pauseSandbox(sandbox);
+        jobStore.update(jobId, { sandboxPaused: true });
+        console.log(`[${jobId}] Paused sandbox: ${sandboxName}`);
       } catch (cleanupError) {
-        console.error(`[${jobId}] Failed to destroy sandbox ${sandboxName}:`, cleanupError);
+        console.error(`[${jobId}] Failed to pause sandbox ${sandboxName}:`, cleanupError);
       }
     }
   }

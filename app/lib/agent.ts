@@ -30,7 +30,7 @@ const ANALYSIS_PROMPT = `Analyze the repository at /repo and generate a comprehe
 
 ## Output Format
 
-Create a markdown document with:
+Create a markdown document with these sections:
 
 ### 1. Overview
 - 2-3 paragraphs describing what the system does
@@ -75,12 +75,45 @@ sequenceDiagram
 ### 6. Key Design Decisions
 Highlight 2-3 important architectural decisions
 
+## REQUIRED: Structured JSON Output
+
+At the END of your response, include a JSON code block with this exact structure (do not include any other text after the JSON):
+
+\`\`\`json
+{
+  "patterns": {
+    "framework": "The main framework used (e.g., Next.js, Express, Django)",
+    "architecture": "The architecture pattern (e.g., Client-Server, Microservices, Monolith, Serverless)",
+    "keyModules": ["List of key modules or directories with significance"]
+  },
+  "reactFlowData": {
+    "architecture": {
+      "nodes": [
+        { "id": "unique-id", "type": "service|database|client|external|gateway", "position": { "x": 0, "y": 0 }, "data": { "label": "Name", "description": "What this component does" } }
+      ],
+      "edges": [
+        { "id": "edge-id", "source": "source-id", "target": "target-id", "label": "optional label" }
+      ]
+    },
+    "dataFlow": {
+      "nodes": [
+        { "id": "flow-id", "type": "input|default|output", "position": { "x": 0, "y": 0 }, "data": { "label": "Step name", "description": "What happens here" } }
+      ],
+      "edges": [
+        { "id": "flow-edge", "source": "from-id", "target": "to-id", "label": "data being passed", "animated": true }
+      ]
+    }
+  }
+}
+\`\`\`
+
 ## Guidelines
 - Be thorough but concise
 - Use specific file paths (all starting with /repo/)
 - Make diagrams clear and accurate
 - Focus on architecture, not line-by-line code
-- DO NOT attempt to clone or download anything - work only with existing /repo contents`;
+- DO NOT attempt to clone or download anything - work only with existing /repo contents
+- The JSON at the end is REQUIRED - do not skip it`;
 
 const HAIKU_MODEL = 'claude-haiku-4-5';
 

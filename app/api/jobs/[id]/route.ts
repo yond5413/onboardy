@@ -27,6 +27,10 @@ export async function GET(
       audioBase64: job.audioBase64,
       error: job.error,
       createdAt: job.createdAt.toISOString(),
+      // New fields for Agent A deliverables
+      analysisContext: job.analysisContext,
+      sandboxPaused: job.sandboxPaused,
+      reactFlowData: job.reactFlowData,
     });
   } catch (error) {
     console.error('Failed to get job:', error);
