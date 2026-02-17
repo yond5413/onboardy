@@ -98,6 +98,7 @@ export async function POST(request: Request) {
       status: 'queued',
       sandbox_name: sandboxName,
       podcast_style: podcastStyle || 'overview',
+      sandbox_paused: false,
       deleted: false,
     });
 
@@ -252,7 +253,7 @@ async function processJob(
     
     await supabase.from('jobs').update({
       status: 'failed',
-      error: errorMessage,
+      error_message: errorMessage,
     }).eq('id', jobId);
 
     jobStore.update(jobId, {

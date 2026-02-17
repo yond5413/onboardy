@@ -1,6 +1,44 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/app/lib/supabase/server';
 import { jobStore } from '@/app/lib/jobs';
+import { deleteSandbox } from '@/app/lib/blaxel';
+
+// Async function to delete sandbox with retry logic
+async function deleteSandboxWithRetry(
+  sandboxName: string,
+  jobId: string,
+  attempts = 0
+): Promise<void> {
+  const maxAttempts = 4;
+  const delays = [0, 1000, 5000, 15000]; // immediate, 1s, 5s, 15s
+
+  try {
+    if (attempts > 0) {
+      console.log(`[${jobId}] Retrying sandbox deletion (attempt ${attempts}/${maxAttempts})...`);
+      await new Promise((resolve) => setTimeout(resolve, delays[attempts]));
+    }
+
+    await deleteSandbox(sandboxName);
+    console.log(`[${jobId}] Sandbox deleted successfully`);
+
+    // Update database to reflect sandbox is destroyed
+    const supabase = await createClient();
+    await supabase
+      .from('jobs')
+      .update({ sandbox_paused: false })
+      .eq('id', jobId);
+  } catch (error) {
+    console.error(`[${jobId}] Failed to delete sandbox (attempt ${attempts + 1}):`, error);
+
+    if (attempts < maxAttempts - 1) {
+      // Retry with exponential backoff
+      deleteSandboxWithRetry(sandboxName, jobId, attempts + 1);
+    } else {
+      console.error(`[${jobId}] Failed to delete sandbox after ${maxAttempts} attempts`);
+      // Log for monitoring - in production, you might want to store this in a cleanup_failures table
+    }
+  }
+}
 
 export async function GET(
   request: Request,
@@ -41,7 +79,7 @@ export async function GET(
       markdown_content: job.markdown_content,
       script_content: job.script_content,
       audio_file_path: job.audio_file_path,
-      error: job.error,
+      error: job.error_message,
       created_at: job.created_at,
       updated_at: job.updated_at,
       analysis_context: job.analysis_context,
@@ -66,6 +104,7 @@ export async function DELETE(
     const { data: { user } } = await supabase.auth.getUser();
     
     if (!user) {
+      console.log('[DELETE] No user authenticated');
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
@@ -73,32 +112,59 @@ export async function DELETE(
     }
 
     const { id: jobId } = await params;
+    console.log(`[DELETE] Attempting to delete job ${jobId} for user ${user.id}`);
 
-    // Check ownership
+    // Fetch job with all fields needed for cleanup
     const { data: job, error: fetchError } = await supabase
       .from('jobs')
-      .select('user_id')
+      .select('user_id, sandbox_name, sandbox_paused')
       .eq('id', jobId)
       .single();
 
-    if (fetchError || !job) {
+    if (fetchError) {
+      console.log(`[DELETE] Fetch error:`, fetchError);
+    }
+    if (!job) {
+      console.log(`[DELETE] Job not found: ${jobId}`);
       return NextResponse.json(
         { error: 'Job not found' },
         { status: 404 }
       );
     }
 
+    console.log(`[DELETE] Job owner: ${job.user_id}, Current user: ${user.id}`);
     if (job.user_id !== user.id) {
+      console.log(`[DELETE] Unauthorized - user mismatch`);
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
       );
     }
 
-    // Soft delete
+    // Start async sandbox cleanup if sandbox exists and is paused
+    if (job.sandbox_name && job.sandbox_paused) {
+      console.log(`[${jobId}] Initiating sandbox deletion for: ${job.sandbox_name}`);
+      // Fire and forget - don't await
+      deleteSandboxWithRetry(job.sandbox_name, jobId);
+    }
+
+    // Clear all data fields to free up space, then soft delete
     const { error: updateError } = await supabase
       .from('jobs')
-      .update({ deleted: true, deleted_at: new Date().toISOString() })
+      .update({
+        // Clear content fields to free DB space
+        markdown_content: null,
+        script_content: null,
+        audio_file_path: null,
+        analysis_context: null,
+        react_flow_data: null,
+        analysis_metrics: null,
+        error_message: null,
+        // Soft delete
+        deleted: true,
+        deleted_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
       .eq('id', jobId);
 
     if (updateError) {
@@ -112,7 +178,12 @@ export async function DELETE(
     // Also remove from in-memory store
     jobStore.delete(jobId);
 
-    return NextResponse.json({ success: true });
+    console.log(`[${jobId}] Job soft deleted successfully`);
+
+    return NextResponse.json({
+      success: true,
+      cleanupInitiated: !!(job.sandbox_name && job.sandbox_paused),
+    });
   } catch (error) {
     console.error('Failed to delete job:', error);
     return NextResponse.json(

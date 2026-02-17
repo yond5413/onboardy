@@ -29,7 +29,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-import { MoreHorizontal, Trash2, ExternalLink, Headphones } from "lucide-react";
+import { MoreHorizontal, Trash2, ExternalLink, Headphones, AlertTriangle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 interface Job {
@@ -73,7 +73,14 @@ export function JobsTable({ jobs }: JobsTableProps) {
         throw new Error('Failed to delete job');
       }
 
-      toast.success('Analysis deleted successfully');
+      const data = await response.json();
+      
+      if (data.cleanupInitiated) {
+        toast.success('Analysis deleted. Sandbox cleanup in progress...');
+      } else {
+        toast.success('Analysis deleted successfully');
+      }
+      
       window.location.reload();
     } catch (error) {
       toast.error('Failed to delete analysis');
@@ -175,13 +182,25 @@ export function JobsTable({ jobs }: JobsTableProps) {
         </TableBody>
       </Table>
 
-      <AlertDialog open={!!deleteJobId} onOpenChange={() => setDeleteJobId(null)}>
+      <AlertDialog open={!!deleteJobId} onOpenChange={() => !deleting && setDeleteJobId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete this analysis and all associated data.
-              This action cannot be undone.
+            <AlertDialogTitle className="flex items-center gap-2 text-red-600">
+              <AlertTriangle className="h-5 w-5" />
+              Permanently Delete Analysis?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="space-y-3">
+              <p className="font-medium text-foreground">
+                This will permanently delete:
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-sm">
+                <li>The job from your dashboard</li>
+                <li>The sandbox and free up resources</li>
+                <li>All generated content (system design, audio, diagrams)</li>
+              </ul>
+              <p className="text-red-600 font-medium text-sm">
+                This action cannot be undone.
+              </p>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -191,7 +210,14 @@ export function JobsTable({ jobs }: JobsTableProps) {
               disabled={deleting}
               className="bg-red-600 hover:bg-red-700"
             >
-              {deleting ? 'Deleting...' : 'Delete'}
+              {deleting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Delete Permanently'
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
