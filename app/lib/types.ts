@@ -1,7 +1,7 @@
 import type { PodcastStyle } from './script';
 import type { AnalysisMetrics } from './cost-tracker';
 
-export type JobStatus = 'queued' | 'cloning' | 'analyzing' | 'generating' | 'completed' | 'failed' | 'destroyed' | 'generating_podcast';
+export type JobStatus = 'queued' | 'processing' | 'cloning' | 'analyzing' | 'generating' | 'completed' | 'failed' | 'destroyed' | 'generating_podcast';
 
 // React Flow node and edge types for diagram data
 export interface ReactFlowNode {
