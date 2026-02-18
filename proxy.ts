@@ -1,12 +1,12 @@
 import { type NextRequest } from 'next/server';
 import { updateSession } from '@/app/lib/supabase/middleware';
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { response, user } = await updateSession(request);
   
   // Define public paths that don't require authentication
   const publicPaths = [
-    '/',
+    '/about',
     '/login',
     '/signup',
     '/auth/callback',
@@ -40,8 +40,8 @@ export async function middleware(request: NextRequest) {
       );
     }
     
-    // For page routes, redirect to login
-    return Response.redirect(new URL('/login', request.url));
+    // For page routes, redirect to about page to show product first
+    return Response.redirect(new URL('/about', request.url));
   }
   
   return response;
