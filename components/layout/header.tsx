@@ -32,10 +32,10 @@ export async function Header() {
           {user && (
             <nav className="hidden md:flex items-center gap-4">
               <Link 
-                href="/" 
+                href="/new" 
                 className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
               >
-                Create
+                New Analysis
               </Link>
               <Link 
                 href="/dashboard" 
