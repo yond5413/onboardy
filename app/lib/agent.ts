@@ -8,6 +8,7 @@ import {
   exportMetrics,
   type AnalysisMetrics 
 } from './cost-tracker';
+import { JobEvents } from './job-events';
 
 const SYSTEM_PROMPT = `You are an expert software architect and technical analyst.
 
@@ -252,7 +253,12 @@ export async function analyzeRepoWithAgent(
   let finalResult = '';
   let rawOutput = '';
 
-  onProgress?.('Starting analysis with Claude Haiku 4.5...');
+  const progress = (message: string) => {
+    JobEvents.emitProgress(jobId, message);
+    onProgress?.(message);
+  };
+
+  progress('Starting analysis with Claude Haiku 4.5...');
 
   for await (const message of query({
     prompt: ANALYSIS_PROMPT,
@@ -281,10 +287,14 @@ export async function analyzeRepoWithAgent(
         if ('text' in block) {
           rawOutput += block.text;
           finalResult += block.text;
+          if (block.text.length > 50) {
+            JobEvents.emitThinking(jobId, block.text.substring(0, 150));
+          }
           if (onProgress) {
             onProgress(block.text.substring(0, 150));
           }
         } else if ('name' in block) {
+          JobEvents.emitToolUse(jobId, block.name);
           if (onProgress) {
             onProgress(`[Tool: ${block.name}]`);
           }
@@ -307,7 +317,8 @@ export async function analyzeRepoWithAgent(
   console.log(formatMetrics(metrics));
   console.log('Metrics JSON:', JSON.stringify(exportMetrics(metrics), null, 2));
 
-  onProgress?.('Analysis complete!');
+  progress('Analysis complete!');
+  JobEvents.emitComplete(jobId);
 
   return {
     markdown: finalResult,
@@ -337,7 +348,12 @@ export async function generateDiagramWithAgent(
   let rawOutput = '';
   let jsonStr = '';
 
-  onProgress?.('Generating diagram data with Claude Haiku 4.5...');
+  const progress = (message: string) => {
+    JobEvents.emitProgress(jobId, message);
+    onProgress?.(message);
+  };
+
+  progress('Generating diagram data with Claude Haiku 4.5...');
 
   for await (const message of query({
     prompt: DIAGRAM_PROMPT,
@@ -363,10 +379,14 @@ export async function generateDiagramWithAgent(
       for (const block of message.message.content) {
         if ('text' in block) {
           rawOutput += block.text;
+          if (block.text.length > 50) {
+            JobEvents.emitThinking(jobId, block.text.substring(0, 100));
+          }
           if (onProgress) {
             onProgress(block.text.substring(0, 100));
           }
         } else if ('name' in block) {
+          JobEvents.emitToolUse(jobId, block.name);
           if (onProgress) {
             onProgress(`[Tool: ${block.name}]`);
           }

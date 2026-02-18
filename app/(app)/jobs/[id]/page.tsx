@@ -22,7 +22,8 @@ import {
   FolderOpen,
   Loader2,
   CheckCircle,
-  XCircle
+  XCircle,
+  MessageSquare
 } from 'lucide-react';
 import Link from 'next/link';
 import mermaid from 'mermaid';
@@ -31,6 +32,8 @@ import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
 import { ArchitectureDiagram } from '@/app/components/ArchitectureDiagram';
 import { AnalysisContextViewer } from '@/app/components/AnalysisContextViewer';
 import { SandboxExplorer } from '@/app/components/SandboxExplorer';
+import { AgentLogStream } from '@/app/components/AgentLogStream';
+import { ChatPanel } from '@/app/components/ChatPanel';
 
 interface JobData {
   id: string;
@@ -296,6 +299,11 @@ export default function JobDetailPage() {
         </Card>
       )}
 
+      {/* Real-time Agent Logs */}
+      {['queued', 'processing', 'analyzing'].includes(job.status) && (
+        <AgentLogStream jobId={jobId} isActive={['queued', 'processing', 'analyzing'].includes(job.status)} />
+      )}
+
       {/* Error State */}
       {job.status === 'failed' && job.error && (
         <Alert variant="destructive">
@@ -363,7 +371,7 @@ export default function JobDetailPage() {
 
           {/* Tabs */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-5">
+            <TabsList className="grid w-full grid-cols-6">
               <TabsTrigger value="design">
                 <FileText className="mr-2 h-4 w-4" />
                 Design
@@ -375,6 +383,10 @@ export default function JobDetailPage() {
               <TabsTrigger value="script" disabled={!job.script_content}>
                 <Headphones className="mr-2 h-4 w-4" />
                 Script
+              </TabsTrigger>
+              <TabsTrigger value="chat">
+                <MessageSquare className="mr-2 h-4 w-4" />
+                Chat
               </TabsTrigger>
               <TabsTrigger value="details">
                 <Info className="mr-2 h-4 w-4" />
@@ -440,6 +452,13 @@ export default function JobDetailPage() {
                   </pre>
                 </CardContent>
               </Card>
+            </TabsContent>
+
+            <TabsContent value="chat" className="mt-6">
+              <ChatPanel 
+                jobId={jobId} 
+                isCompleted={job.status === 'completed'} 
+              />
             </TabsContent>
 
             <TabsContent value="details" className="mt-6">

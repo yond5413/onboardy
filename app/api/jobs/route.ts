@@ -6,6 +6,8 @@ import type { SandboxInstance } from '@blaxel/core';
 import { analyzeRepoWithAgent, generateDiagramWithAgent, type DiagramResult } from '@/app/lib/agent';
 import { generateTTS } from '@/app/lib/elevenlabs';
 import { generatePodcastScript, type PodcastStyle } from '@/app/lib/script';
+import { exportAnalysisOutputs, type ExportPaths } from '@/app/lib/storage/export';
+import { emitJobEvent } from '@/app/lib/job-events';
 import type { AnalysisJob, AnalysisContext, ReactFlowData } from '@/app/lib/types';
 
 function generateId(): string {
@@ -149,6 +151,7 @@ async function processJob(
     // Update status to processing
     await supabase.from('jobs').update({ status: 'processing' }).eq('id', jobId);
     jobStore.update(jobId, { status: 'processing' });
+    emitJobEvent(jobId, 'status', 'processing');
 
     // Create sandbox
     sandbox = await createAnalysisSandbox(sandboxName);
@@ -174,6 +177,7 @@ async function processJob(
       jobId,
       (progress) => {
         console.log(`[${jobId}] ${progress}`);
+        emitJobEvent(jobId, 'progress', progress);
       }
     );
     
@@ -191,6 +195,7 @@ async function processJob(
         jobId,
         (progress) => {
           console.log(`[${jobId}] ${progress}`);
+          emitJobEvent(jobId, 'progress', progress);
         }
       );
       
@@ -241,7 +246,28 @@ async function processJob(
       reactFlowData,
     });
 
+    // Auto-export analysis outputs to Supabase Storage
+    let exportPaths: ExportPaths = {};
+    try {
+      console.log(`[${jobId}] Exporting analysis outputs to storage...`);
+      exportPaths = await exportAnalysisOutputs(jobId, {
+        markdown,
+        diagramJson: reactFlowData ? JSON.stringify(reactFlowData, null, 2) : undefined,
+        contextJson: analysisContext ? JSON.stringify(analysisContext, null, 2) : undefined,
+      });
+      
+      // Update job with export paths
+      await supabase.from('jobs').update({
+        export_paths: exportPaths,
+      }).eq('id', jobId);
+      
+      console.log(`[${jobId}] Export complete:`, exportPaths);
+    } catch (exportError) {
+      console.error(`[${jobId}] Failed to export outputs:`, exportError);
+    }
+
     console.log(`[${jobId}] Job completed successfully`);
+    emitJobEvent(jobId, 'complete', 'Analysis completed successfully');
     
   } catch (error) {
     console.error(`Error processing job ${jobId}:`, error);
@@ -260,6 +286,8 @@ async function processJob(
       status: 'failed',
       error: errorMessage,
     });
+
+    emitJobEvent(jobId, 'error', errorMessage);
   } finally {
     if (sandbox) {
       try {
