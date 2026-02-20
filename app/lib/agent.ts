@@ -1,5 +1,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SandboxInstance } from '@blaxel/core';
+import { readFile } from 'fs/promises';
+import path from 'path';
 import { 
   createMetrics, 
   updatePhase1Metrics,
@@ -9,6 +11,130 @@ import {
   type AnalysisMetrics 
 } from './cost-tracker';
 import { JobEvents } from './job-events';
+
+const HIGHLEVEL_PROMPT = `Analyze the repository at /repo using an iterative approach.
+
+## Step 1: Explore & Take Notes
+As you explore, write incremental notes to /repo/.analysis-notes.md. After examining each significant component, append your findings.
+
+## Step 2: Know When to Stop
+Use your reasoning to determine when you have enough information:
+- You understand the entry points and main flows
+- You've identified key components (5-12)
+- You understand the high-level architecture
+
+## Step 3: Write Final Document
+When ready, create /repo/system-design.md - a concise high-level overview.
+
+## Document Structure
+
+### 1. Overview (2-3 sentences)
+What does this system do? What problem does it solve?
+
+### 2. Tech Stack
+Bullet list of technologies:
+- Frontend/UI
+- Backend/Server
+- Database/Storage
+- Key libraries/services
+
+### 3. Architecture (with Mermaid Diagram)
+Brief description + high-level architecture diagram:
+\`\`\`mermaid
+graph TD
+    A[Client] --> B[API]
+    B --> C[Services]
+    C --> D[Database]
+\`\`\`
+
+### 4. Key Components (Table Format)
+| Name | Purpose | Key Files |
+|------|---------|-----------|
+| ComponentName | Brief description | /repo/path.ts |
+
+### 5. Data Flow (3-5 steps)
+How does a typical request move through the system?
+
+### 6. Getting Started
+- Prerequisites needed
+- Quick start steps
+
+## Rules
+- Be concise - this is a high-level overview
+- No emojis, no conversational filler
+- Use markdown tables for components
+- All paths start with /repo/
+- Output ONLY markdown
+- Maximum 10 components in table
+
+Create /repo/system-design.md when done.`;
+
+const TECHNICAL_PROMPT = `Analyze the repository at /repo using an iterative approach.
+
+## Step 1: Explore & Take Notes
+As you explore, write detailed notes to /repo/.analysis-notes.md. Include:
+- Function signatures and parameters
+- Data models and interfaces
+- API endpoints and their contracts
+- Configuration values
+
+## Step 2: Know When to Stop
+When you have captured:
+- Core modules in detail
+- All function signatures and interfaces
+- All API routes and handlers
+- Data models and storage
+
+## Step 3: Write Final Document
+Create /repo/technical-spec.md - a comprehensive technical document.
+
+## Document Structure
+
+### 1. Overview
+What this system does (1 paragraph).
+
+### 2. Tech Stack (with versions)
+Languages, frameworks, databases, key dependencies.
+
+### 3. Architecture
+Description + Mermaid diagram showing data flow.
+
+### 4. Component Details (Table)
+| Name | Purpose | Key Files | Public APIs |
+|------|---------|-----------|-------------|
+| ComponentName | Brief | /repo/path.ts | functionName() |
+
+### 5. API Endpoints
+For each route:
+- Endpoint: GET /api/users
+- Purpose, Request, Response, Handler File
+
+### 6. Data Models
+TypeScript interfaces for key data structures.
+
+### 7. Configuration
+Environment variables and config files.
+
+### 8. External Integrations
+Third-party services used.
+
+### 9. Data Flow
+Detailed step-by-step with function names.
+
+### 10. Key Design Decisions
+Technical choices and rationale.
+
+### 11. Getting Started
+Clone, install, environment setup, run locally.
+
+## Rules
+- Be comprehensive - this is for developers
+- Include actual code snippets, interfaces
+- Use markdown tables
+- All paths start with /repo/
+- Output ONLY markdown
+
+Create /repo/technical-spec.md when done.`;
 
 const SYSTEM_PROMPT = `You are an expert software architect and technical analyst.
 
@@ -185,8 +311,12 @@ The diagrams should be aesthetically pleasing and easy to understand for a new d
 
 const HAIKU_MODEL = 'claude-haiku-4-5';
 
+export type AnalysisType = 'highlevel' | 'technical' | 'both';
+
 export interface AnalysisResult {
   markdown: string;
+  highlevel?: string;
+  technical?: string;
   metrics: AnalysisMetrics;
 }
 
@@ -427,4 +557,143 @@ export async function generateDiagramWithAgent(
     ...diagramData,
     metrics,
   };
+}
+
+export async function analyzeRepoIterative(
+  sandbox: SandboxInstance,
+  jobId: string,
+  type: AnalysisType = 'highlevel',
+  onProgress?: (message: string) => void
+): Promise<AnalysisResult> {
+  const apiKey = process.env.BL_API_KEY;
+  if (!apiKey) {
+    throw new Error('BL_API_KEY environment variable is required');
+  }
+
+  const prompts = {
+    highlevel: { prompt: HIGHLEVEL_PROMPT, outputFile: '/repo/system-design.md', name: 'High-Level' },
+    technical: { prompt: TECHNICAL_PROMPT, outputFile: '/repo/technical-spec.md', name: 'Technical' },
+    both: { 
+      prompt: `${HIGHLEVEL_PROMPT}\n\nAfter creating /repo/system-design.md, continue to create /repo/technical-spec.md with detailed technical documentation.`,
+      outputFile: '/repo/system-design.md',
+      name: 'Both'
+    },
+  };
+
+  const config = prompts[type];
+  const mcpUrl = `${sandbox.metadata?.url}/mcp`;
+  const metrics = createMetrics(jobId);
+  
+  let rawOutput = '';
+  let finalResult = '';
+  let notesContent = '';
+  let highlevelContent = '';
+  let technicalContent = '';
+
+  const progress = (message: string) => {
+    JobEvents.emitProgress(jobId, message);
+    onProgress?.(message);
+  };
+
+  progress(`Starting ${config.name} iterative analysis with Claude Haiku 4.5...`);
+
+  const agent = query({
+    prompt: config.prompt,
+    options: {
+      model: HAIKU_MODEL,
+      systemPrompt: SYSTEM_PROMPT,
+      mcpServers: {
+        sandbox: {
+          type: 'http',
+          url: mcpUrl,
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+          },
+        },
+      },
+      tools: [],
+      allowedTools: [],
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+      maxTurns: 50,
+    },
+  });
+
+  const agentIterator = agent[Symbol.asyncIterator]();
+  
+  while (true) {
+    const { done, value: message } = await agentIterator.next();
+    if (done) break;
+
+    if (message.type === 'assistant' && message.message?.content) {
+      for (const block of message.message.content) {
+        if ('text' in block) {
+          rawOutput += block.text;
+          finalResult += block.text;
+          if (block.text.length > 50) {
+            JobEvents.emitThinking(jobId, block.text.substring(0, 150));
+          }
+          if (onProgress) {
+            onProgress(block.text.substring(0, 150));
+          }
+        } else if ('name' in block) {
+          const toolName = block.name;
+          JobEvents.emitToolUse(jobId, toolName);
+          if (onProgress) {
+            onProgress(`[Tool: ${toolName}]`);
+          }
+        }
+      }
+    } else if (message.type === 'result' && message.subtype === 'success') {
+      const resultText = (message as { result?: string }).result;
+      if (resultText) {
+        finalResult = resultText;
+        if (resultText.includes('/repo/system-design.md')) {
+          highlevelContent = resultText;
+        } else if (resultText.includes('/repo/technical-spec.md')) {
+          technicalContent = resultText;
+        }
+      }
+    } else if (message.type === 'system') {
+      const sysMsg = message as { subtype?: string; output?: { path?: string; content?: string } };
+      if (sysMsg.output?.path === '/repo/.analysis-notes.md') {
+        notesContent = sysMsg.output.content || '';
+      } else if (sysMsg.output?.path === '/repo/system-design.md') {
+        highlevelContent = sysMsg.output.content || '';
+      } else if (sysMsg.output?.path === '/repo/technical-spec.md') {
+        technicalContent = sysMsg.output.content || '';
+      }
+    }
+  }
+
+  const result: AnalysisResult = {
+    markdown: highlevelContent || technicalContent || finalResult,
+    metrics,
+  };
+
+  if (highlevelContent) {
+    result.highlevel = highlevelContent;
+  }
+  if (technicalContent) {
+    result.technical = technicalContent;
+  }
+
+  if (!result.markdown || result.markdown.length < 100) {
+    result.markdown = finalResult;
+  }
+
+  updatePhase1Metrics(
+    metrics,
+    config.prompt,
+    rawOutput
+  );
+  finalizeMetrics(metrics);
+
+  console.log(formatMetrics(metrics));
+  console.log('Metrics JSON:', JSON.stringify(exportMetrics(metrics), null, 2));
+
+  progress('Analysis complete!');
+  JobEvents.emitComplete(jobId);
+
+  return result;
 }
