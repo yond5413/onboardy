@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
+import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { 
   ArrowLeft, 
@@ -24,11 +25,13 @@ import {
   CheckCircle,
   XCircle,
   MessageSquare,
-  Share2
+  Share2,
+  Edit3,
+  User
 } from 'lucide-react';
 import Link from 'next/link';
 import mermaid from 'mermaid';
-import type { PodcastStyle } from '@/app/lib/script';
+import type { PodcastStyle, PodcastSettings } from '@/app/lib/script';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
 import { ArchitectureDiagram, type DiagramNodeData } from '@/app/components/ArchitectureDiagram';
 import { AnalysisContextViewer } from '@/app/components/AnalysisContextViewer';
@@ -38,6 +41,15 @@ import { ChatPanel } from '@/app/components/ChatPanel';
 import { NodeActionsMenu } from '@/app/components/NodeActionsMenu';
 import type { GraphContext } from '@/app/lib/types';
 import type { Node, Edge } from '@xyflow/react';
+import { PodcastSettingsModal } from '@/components/podcast-settings-modal';
+import { OwnerList } from '@/components/owner-badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
 
 interface JobData {
   id: string;
@@ -46,6 +58,18 @@ interface JobData {
   markdown_content?: string;
   script_content?: string;
   audio_file_path?: string;
+  podcast_settings?: PodcastSettings;
+  ownership_data?: {
+    globalOwners: Array<{
+      name: string;
+      email: string;
+      confidence: number;
+      reasons: string[];
+      lastCommitDate: string;
+      commitCount: number;
+      recentCommitCount: number;
+    }>;
+  };
   error?: string;
   created_at: string;
   updated_at: string;
@@ -70,6 +94,9 @@ export default function JobDetailPage() {
   const [nodeActionsPosition, setNodeActionsPosition] = useState<{ x: number; y: number } | null>(null);
   const [chatInitialMessage, setChatInitialMessage] = useState<string>('');
   const [chatGraphContext, setChatGraphContext] = useState<GraphContext | undefined>(undefined);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [editingScript, setEditingScript] = useState(false);
+  const [editedScript, setEditedScript] = useState('');
   const mermaidRef = useRef<HTMLDivElement>(null);
 
   // Initialize mermaid

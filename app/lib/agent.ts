@@ -12,6 +12,30 @@ import {
 } from './cost-tracker';
 import { JobEvents } from './job-events';
 
+export interface OwnerInfo {
+  name: string;
+  email: string;
+  confidence: number;
+  reasons: string[];
+  lastCommitDate: string;
+  commitCount: number;
+  recentCommitCount: number;
+}
+
+export interface ComponentOwnership {
+  componentId: string;
+  owners: OwnerInfo[];
+}
+
+export interface OwnershipData {
+  components: {
+    [componentId: string]: {
+      owners: OwnerInfo[];
+    };
+  };
+  globalOwners: OwnerInfo[];
+}
+
 const HIGHLEVEL_PROMPT = `Analyze the repository at /repo using an iterative approach.
 
 ## Step 1: Explore & Take Notes
