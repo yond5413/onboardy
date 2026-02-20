@@ -29,11 +29,14 @@ import Link from 'next/link';
 import mermaid from 'mermaid';
 import type { PodcastStyle } from '@/app/lib/script';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
-import { ArchitectureDiagram } from '@/app/components/ArchitectureDiagram';
+import { ArchitectureDiagram, type DiagramNodeData } from '@/app/components/ArchitectureDiagram';
 import { AnalysisContextViewer } from '@/app/components/AnalysisContextViewer';
 import { SandboxExplorer } from '@/app/components/SandboxExplorer';
 import { AgentLogStream } from '@/app/components/AgentLogStream';
 import { ChatPanel } from '@/app/components/ChatPanel';
+import { NodeActionsMenu } from '@/app/components/NodeActionsMenu';
+import type { GraphContext } from '@/app/lib/types';
+import type { Node, Edge } from '@xyflow/react';
 
 interface JobData {
   id: string;
@@ -60,6 +63,10 @@ export default function JobDetailPage() {
   const [activeTab, setActiveTab] = useState('design');
   const [generatingPodcast, setGeneratingPodcast] = useState(false);
   const [podcastStyle, setPodcastStyle] = useState<PodcastStyle>('overview');
+  const [selectedNode, setSelectedNode] = useState<Node<DiagramNodeData> | null>(null);
+  const [nodeActionsPosition, setNodeActionsPosition] = useState<{ x: number; y: number } | null>(null);
+  const [chatInitialMessage, setChatInitialMessage] = useState<string>('');
+  const [chatGraphContext, setChatGraphContext] = useState<GraphContext | undefined>(undefined);
   const mermaidRef = useRef<HTMLDivElement>(null);
 
   // Initialize mermaid
@@ -208,6 +215,24 @@ export default function JobDetailPage() {
       toast.error('Failed to delete sandbox');
     }
   }
+
+  const handleNodeClick = (node: Node<DiagramNodeData>) => {
+    setSelectedNode(node);
+    setNodeActionsPosition({ x: 20, y: 20 });
+  };
+
+  const handleActionSelect = (action: string, graphContext: GraphContext) => {
+    setChatInitialMessage(action);
+    setChatGraphContext(graphContext);
+    setNodeActionsPosition(null);
+    setSelectedNode(null);
+    setActiveTab('chat');
+  };
+
+  const handleCloseNodeActions = () => {
+    setNodeActionsPosition(null);
+    setSelectedNode(null);
+  };
 
   const statusColors: Record<string, string> = {
     queued: 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20',
@@ -420,11 +445,22 @@ export default function JobDetailPage() {
                 </CardHeader>
                 <CardContent>
                   {job.react_flow_data?.architecture?.nodes?.length > 0 ? (
-                    <div className="h-[600px] border rounded-lg overflow-hidden">
+                    <div className="h-[600px] border rounded-lg overflow-hidden relative">
                       <ArchitectureDiagram
                         nodes={job.react_flow_data.architecture.nodes}
                         edges={job.react_flow_data.architecture.edges}
+                        onNodeClick={handleNodeClick}
                       />
+                      {selectedNode && nodeActionsPosition && (
+                        <NodeActionsMenu
+                          node={selectedNode}
+                          nodes={job.react_flow_data.architecture.nodes}
+                          edges={job.react_flow_data.architecture.edges}
+                          position={nodeActionsPosition}
+                          onSelectAction={handleActionSelect}
+                          onClose={handleCloseNodeActions}
+                        />
+                      )}
                     </div>
                   ) : job.markdown_content?.includes('```mermaid') ? (
                     <div ref={mermaidRef} className="flex justify-center overflow-x-auto" />
@@ -457,7 +493,9 @@ export default function JobDetailPage() {
             <TabsContent value="chat" className="mt-6">
               <ChatPanel 
                 jobId={jobId} 
-                isCompleted={job.status === 'completed'} 
+                isCompleted={job.status === 'completed'}
+                initialMessage={chatInitialMessage}
+                graphContext={chatGraphContext}
               />
             </TabsContent>
 
