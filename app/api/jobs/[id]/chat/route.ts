@@ -1,12 +1,12 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/app/lib/supabase/server';
 import { resumeSandbox } from '@/app/lib/blaxel';
-import { chatWithAgent, type ChatMessage } from '@/app/lib/chat-agent';
+import { chatWithAgent, type ChatMessage, type GraphContext } from '@/app/lib/chat-agent';
 import type { SandboxInstance } from '@blaxel/core';
 
 const IDLE_TIMEOUT_MS = 30000; // 30 seconds
 
-let idleTimers: Map<string, NodeJS.Timeout> = new Map();
+const idleTimers: Map<string, NodeJS.Timeout> = new Map();
 
 function clearIdleTimer(jobId: string) {
   const timer = idleTimers.get(jobId);
@@ -80,7 +80,7 @@ export async function POST(
       );
     }
 
-    const { message } = await request.json();
+    const { message, graphContext } = await request.json() as { message?: string; graphContext?: GraphContext };
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json(
@@ -89,11 +89,10 @@ export async function POST(
       );
     }
 
-    // Resume sandbox if paused
-    let sandbox: SandboxInstance;
+    // Ensure sandbox is available for chat requests
+    console.log(`[Chat] Ensuring sandbox is active for job ${jobId}`);
+    const sandbox: SandboxInstance = await resumeSandbox(job.sandbox_name);
     if (job.sandbox_paused) {
-      console.log(`[Chat] Resuming sandbox for job ${jobId}`);
-      sandbox = await resumeSandbox(job.sandbox_name);
       await supabase.from('jobs').update({ sandbox_paused: false }).eq('id', jobId);
     }
 
@@ -114,20 +113,28 @@ export async function POST(
       contextFiles: msg.context_files || [],
     }));
 
+    const graphContextTags = graphContext ? [
+      `graph:node:${graphContext.nodeId || 'unknown'}`,
+      `graph:label:${graphContext.nodeLabel || 'unknown'}`,
+      `graph:action:${graphContext.action || 'general'}`
+    ] : [];
+
     // Save user message
     await supabase.from('job_chats').insert({
       job_id: jobId,
       role: 'user',
       content: message,
+      context_files: graphContextTags.length > 0 ? graphContextTags : null,
     });
 
     // Call chat agent
     const result = await chatWithAgent(
-      sandbox!,
+      sandbox,
       jobId,
       message,
       conversationHistory,
-      job.markdown_content?.substring(0, 2000)
+      job.markdown_content?.substring(0, 2000),
+      graphContext
     );
 
     // Save assistant response

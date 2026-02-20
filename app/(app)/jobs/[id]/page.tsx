@@ -29,11 +29,22 @@ import Link from 'next/link';
 import mermaid from 'mermaid';
 import type { PodcastStyle } from '@/app/lib/script';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
-import { ArchitectureDiagram } from '@/app/components/ArchitectureDiagram';
+import { ArchitectureDiagram, type DiagramNodeData } from '@/app/components/ArchitectureDiagram';
 import { AnalysisContextViewer } from '@/app/components/AnalysisContextViewer';
 import { SandboxExplorer } from '@/app/components/SandboxExplorer';
 import { AgentLogStream } from '@/app/components/AgentLogStream';
 import { ChatPanel } from '@/app/components/ChatPanel';
+import type { Node } from '@xyflow/react';
+
+
+interface GraphChatContext {
+  nodeId?: string;
+  nodeLabel?: string;
+  nodeType?: string;
+  relatedEdges?: string[];
+  neighborNodes?: string[];
+  action?: 'explain' | 'trace' | 'debug' | 'files';
+}
 
 interface JobData {
   id: string;
@@ -60,6 +71,9 @@ export default function JobDetailPage() {
   const [activeTab, setActiveTab] = useState('design');
   const [generatingPodcast, setGeneratingPodcast] = useState(false);
   const [podcastStyle, setPodcastStyle] = useState<PodcastStyle>('overview');
+  const [pendingPrompt, setPendingPrompt] = useState('');
+  const [pendingGraphContext, setPendingGraphContext] = useState<GraphChatContext | undefined>(undefined);
+  const [selectedArchitectureNode, setSelectedArchitectureNode] = useState<Node<DiagramNodeData> | null>(null);
   const mermaidRef = useRef<HTMLDivElement>(null);
 
   // Initialize mermaid
@@ -120,6 +134,51 @@ export default function JobDetailPage() {
       }
     }
   }, [job?.markdown_content, activeTab]);
+
+
+  function handleArchitectureNodeClick(node: Node<DiagramNodeData>) {
+    setSelectedArchitectureNode(node);
+  }
+
+  function startGraphContextChat(action: NonNullable<GraphChatContext['action']>) {
+    if (!selectedArchitectureNode) return;
+
+    const nodeLabel = String(selectedArchitectureNode.data?.label || selectedArchitectureNode.id);
+    const nodeType = String(selectedArchitectureNode.type || selectedArchitectureNode.data?.nodeType || 'service');
+
+    const actionPromptMap: Record<NonNullable<GraphChatContext['action']>, string> = {
+      explain: `Explain the ${nodeLabel} component, its responsibilities, and why it exists in this architecture.`,
+      trace: `Trace the data flow and dependencies connected to ${nodeLabel}.`,
+      debug: `If ${nodeLabel} is failing, where should I start debugging and what files should I inspect first?`,
+      files: `List the most important files I should read to understand ${nodeLabel}.`,
+    };
+
+    setPendingPrompt(actionPromptMap[action]);
+    const architectureEdges = job?.react_flow_data?.architecture?.edges || [];
+    const architectureNodes = job?.react_flow_data?.architecture?.nodes || [];
+
+    const relatedEdges = architectureEdges
+      .filter((edge: { id: string; source: string; target: string }) => edge.source === selectedArchitectureNode.id || edge.target === selectedArchitectureNode.id)
+      .map((edge: { id: string }) => edge.id);
+
+    const neighborNodes = architectureEdges
+      .filter((edge: { source: string; target: string }) => edge.source === selectedArchitectureNode.id || edge.target === selectedArchitectureNode.id)
+      .map((edge: { source: string; target: string }) => edge.source === selectedArchitectureNode.id ? edge.target : edge.source)
+      .map((neighborId: string) => {
+        const neighbor = architectureNodes.find((node: { id: string; data?: { label?: string } }) => node.id === neighborId);
+        return neighbor?.data?.label || neighborId;
+      });
+
+    setPendingGraphContext({
+      nodeId: selectedArchitectureNode.id,
+      nodeLabel,
+      nodeType,
+      action,
+      relatedEdges,
+      neighborNodes,
+    });
+    setActiveTab('chat');
+  }
 
   async function handleGeneratePodcast() {
     setGeneratingPodcast(true);
@@ -424,6 +483,7 @@ export default function JobDetailPage() {
                       <ArchitectureDiagram
                         nodes={job.react_flow_data.architecture.nodes}
                         edges={job.react_flow_data.architecture.edges}
+                        onNodeClick={handleArchitectureNodeClick}
                       />
                     </div>
                   ) : job.markdown_content?.includes('```mermaid') ? (
@@ -433,6 +493,21 @@ export default function JobDetailPage() {
                       No architecture diagram available
                     </div>
                   )}
+
+                  {selectedArchitectureNode && (
+                    <div className="mt-4 rounded-lg border p-4 space-y-3">
+                      <p className="text-sm text-muted-foreground">
+                        Selected node: <span className="font-medium text-foreground">{String(selectedArchitectureNode.data?.label || selectedArchitectureNode.id)}</span>
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <Button size="sm" variant="outline" onClick={() => startGraphContextChat('explain')}>Explain</Button>
+                        <Button size="sm" variant="outline" onClick={() => startGraphContextChat('trace')}>Trace Flow</Button>
+                        <Button size="sm" variant="outline" onClick={() => startGraphContextChat('debug')}>Where to Debug</Button>
+                        <Button size="sm" variant="outline" onClick={() => startGraphContextChat('files')}>Files to Read</Button>
+                      </div>
+                    </div>
+                  )}
+
                 </CardContent>
               </Card>
             </TabsContent>
@@ -458,6 +533,12 @@ export default function JobDetailPage() {
               <ChatPanel 
                 jobId={jobId} 
                 isCompleted={job.status === 'completed'} 
+                pendingPrompt={pendingPrompt}
+                pendingGraphContext={pendingGraphContext}
+                onPendingPromptConsumed={() => {
+                  setPendingPrompt('');
+                  setPendingGraphContext(undefined);
+                }}
               />
             </TabsContent>
 

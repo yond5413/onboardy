@@ -15,11 +15,42 @@ Guidelines:
 - Don't make assumptions - verify by reading code when needed
 - Provide actionable advice and code examples when relevant`;
 
-const CHAT_PROMPT_TEMPLATE = (question: string, context?: string) => `
+export interface GraphContext {
+  nodeId?: string;
+  nodeLabel?: string;
+  nodeType?: string;
+  relatedEdges?: string[];
+  neighborNodes?: string[];
+  action?: 'explain' | 'trace' | 'debug' | 'files';
+}
+
+const formatGraphContext = (graphContext?: GraphContext): string => {
+  if (!graphContext) return '';
+
+  const lines = [
+    '## Graph Context',
+    `Node ID: ${graphContext.nodeId || 'unknown'}`,
+    `Node Label: ${graphContext.nodeLabel || 'unknown'}`,
+    `Node Type: ${graphContext.nodeType || 'unknown'}`,
+    `Action: ${graphContext.action || 'general'}`,
+  ];
+
+  if (graphContext.relatedEdges?.length) {
+    lines.push(`Related Edges: ${graphContext.relatedEdges.join(', ')}`);
+  }
+
+  if (graphContext.neighborNodes?.length) {
+    lines.push(`Neighbor Nodes: ${graphContext.neighborNodes.join(', ')}`);
+  }
+
+  return `${lines.join('\n')}\n`;
+};
+
+const CHAT_PROMPT_TEMPLATE = (question: string, context?: string, graphContext?: GraphContext) => `
 The user is asking about a repository that has been analyzed.
 
 ${context ? `## Previous Analysis Context\n${context}\n` : ''}
-
+${formatGraphContext(graphContext)}
 ## User's Question
 ${question}
 
@@ -41,7 +72,8 @@ export async function chatWithAgent(
   jobId: string,
   question: string,
   conversationHistory: ChatMessage[],
-  context?: string
+  context?: string,
+  graphContext?: GraphContext
 ): Promise<ChatResult> {
   const apiKey = process.env.BL_API_KEY;
   if (!apiKey) {
@@ -49,8 +81,7 @@ export async function chatWithAgent(
   }
 
   const mcpUrl = `${sandbox.metadata?.url}/mcp`;
-  
-  let rawOutput = '';
+
   let finalResponse = '';
   const contextFiles: string[] = [];
 
@@ -59,8 +90,8 @@ export async function chatWithAgent(
     .join('\n\n');
 
   const fullPrompt = historyPrompt
-    ? `${historyPrompt}\n\nUser: ${question}`
-    : CHAT_PROMPT_TEMPLATE(question, context);
+    ? `${historyPrompt}\n\n${formatGraphContext(graphContext)}User: ${question}`
+    : CHAT_PROMPT_TEMPLATE(question, context, graphContext);
 
   for await (const message of query({
     prompt: fullPrompt,
@@ -78,14 +109,13 @@ export async function chatWithAgent(
       },
       tools: [],
       allowedTools: [],
-      permissionMode: "bypassPermissions",
+      permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
     },
   })) {
     if (message.type === 'assistant' && message.message?.content) {
       for (const block of message.message.content) {
         if ('text' in block) {
-          rawOutput += block.text;
           finalResponse += block.text;
         } else if ('name' in block) {
           contextFiles.push(block.name);

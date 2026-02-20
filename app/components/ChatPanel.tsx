@@ -14,12 +14,30 @@ interface ChatMessage {
   created_at: string;
 }
 
+interface GraphContext {
+  nodeId?: string;
+  nodeLabel?: string;
+  nodeType?: string;
+  relatedEdges?: string[];
+  neighborNodes?: string[];
+  action?: 'explain' | 'trace' | 'debug' | 'files';
+}
+
 interface ChatPanelProps {
   jobId: string;
   isCompleted: boolean;
+  pendingPrompt?: string;
+  pendingGraphContext?: GraphContext;
+  onPendingPromptConsumed?: () => void;
 }
 
-export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
+export function ChatPanel({
+  jobId,
+  isCompleted,
+  pendingPrompt,
+  pendingGraphContext,
+  onPendingPromptConsumed,
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -37,12 +55,21 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  useEffect(() => {
+    if (!pendingPrompt || !isCompleted || isLoading) return;
+
+    setInput(pendingPrompt);
+    sendChatMessage(pendingPrompt, pendingGraphContext).finally(() => {
+      onPendingPromptConsumed?.();
+    });
+  }, [pendingPrompt]);
+
   const loadChatHistory = async () => {
     try {
       setIsLoadingHistory(true);
       const response = await fetch(`/api/jobs/${jobId}/chat`);
       if (!response.ok) throw new Error('Failed to load chat history');
-      
+
       const data = await response.json();
       setMessages(data.messages || []);
     } catch (err) {
@@ -52,11 +79,9 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
     }
   };
 
-  const sendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    const message = input.trim();
-    if (!message || isLoading) return;
+  const sendChatMessage = async (message: string, graphContext?: GraphContext) => {
+    const normalizedMessage = message.trim();
+    if (!normalizedMessage || isLoading) return;
 
     setInput('');
     setIsLoading(true);
@@ -67,7 +92,7 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
     setMessages(prev => [...prev, {
       id: tempId,
       role: 'user',
-      content: message,
+      content: normalizedMessage,
       created_at: new Date().toISOString(),
     }]);
 
@@ -75,7 +100,7 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
       const response = await fetch(`/api/jobs/${jobId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message: normalizedMessage, graphContext }),
       });
 
       if (!response.ok) {
@@ -84,15 +109,14 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
       }
 
       const data = await response.json();
-      
+
       // Remove temp message and add real messages
       setMessages(prev => prev.filter(m => m.id !== tempId));
-      
-      // Add user message (from server response would be ideal but we're adding optimistically)
+
       setMessages(prev => [...prev, {
         id: `user-${Date.now()}`,
         role: 'user',
-        content: message,
+        content: normalizedMessage,
         created_at: new Date().toISOString(),
       }, {
         id: `assistant-${Date.now()}`,
@@ -108,6 +132,11 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const sendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await sendChatMessage(input);
   };
 
   if (!isCompleted) {
@@ -131,7 +160,7 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
           Ask questions about this codebase
         </CardTitle>
       </CardHeader>
-      
+
       <div className="flex-1 overflow-y-auto px-4">
         {isLoadingHistory ? (
           <div className="flex items-center justify-center py-8">
