@@ -23,7 +23,8 @@ import {
   Loader2,
   CheckCircle,
   XCircle,
-  MessageSquare
+  MessageSquare,
+  Share2
 } from 'lucide-react';
 import Link from 'next/link';
 import mermaid from 'mermaid';
@@ -48,6 +49,8 @@ interface JobData {
   analysis_context?: any;
   react_flow_data?: any;
   sandbox_paused?: boolean;
+  is_public?: boolean;
+  share_token?: string;
 }
 
 export default function JobDetailPage() {
@@ -209,6 +212,38 @@ export default function JobDetailPage() {
     }
   }
 
+  async function handleShareToggle() {
+    if (!job) return;
+    
+    const action = job.is_public ? 'unshare' : 'share';
+    
+    try {
+      const response = await fetch(`/api/jobs/${jobId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update share status');
+      }
+
+      const data = await response.json();
+      
+      if (action === 'share') {
+        const shareUrl = `${window.location.origin}/share/${data.share_token}`;
+        await navigator.clipboard.writeText(shareUrl);
+        setJob(prev => prev ? { ...prev, is_public: true, share_token: data.share_token } : null);
+        toast.success('Link copied to clipboard!');
+      } else {
+        setJob(prev => prev ? { ...prev, is_public: false, share_token: undefined } : null);
+        toast.success('Link removed');
+      }
+    } catch (err) {
+      toast.error('Failed to update share status');
+    }
+  }
+
   const statusColors: Record<string, string> = {
     queued: 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20',
     processing: 'bg-blue-500/10 text-blue-500 border-blue-500/20',
@@ -260,6 +295,11 @@ export default function JobDetailPage() {
               <Badge variant="outline" className={statusColors[job.status] || ''}>
                 {job.status}
               </Badge>
+              {job.is_public && (
+                <Badge variant="secondary" className="bg-green-500/10 text-green-500 border-green-500/20">
+                  Public
+                </Badge>
+              )}
               <span className="text-sm text-muted-foreground">
                 Created {new Date(job.created_at).toLocaleDateString()}
               </span>
@@ -272,6 +312,12 @@ export default function JobDetailPage() {
             <Button variant="outline" size="sm" onClick={handleDownloadMarkdown}>
               <Download className="mr-2 h-4 w-4" />
               Download MD
+            </Button>
+          )}
+          {job.status === 'completed' && (
+            <Button variant="outline" size="sm" onClick={handleShareToggle}>
+              <Share2 className="mr-2 h-4 w-4" />
+              {job.is_public ? 'Unshare' : 'Share'}
             </Button>
           )}
           <Button variant="destructive" size="sm" onClick={handleDeleteJob}>

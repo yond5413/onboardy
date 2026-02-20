@@ -85,11 +85,114 @@ export async function GET(
       analysis_context: job.analysis_context,
       sandbox_paused: job.sandbox_paused,
       react_flow_data: job.react_flow_data,
+      is_public: job.is_public,
+      share_token: job.share_token,
     });
   } catch (error) {
     console.error('Failed to get job:', error);
     return NextResponse.json(
       { error: 'Failed to get job' },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (!user) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    const { id: jobId } = await params;
+    const body = await request.json();
+    const { action } = body;
+
+    const { data: job, error: fetchError } = await supabase
+      .from('jobs')
+      .select('user_id, is_public, share_token')
+      .eq('id', jobId)
+      .single();
+
+    if (fetchError || !job) {
+      return NextResponse.json(
+        { error: 'Job not found' },
+        { status: 404 }
+      );
+    }
+
+    if (job.user_id !== user.id) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+
+    if (action === 'share') {
+      const { data, error: shareError } = await supabase.rpc('share_job', { job_uuid: jobId });
+      
+      if (shareError) {
+        const token = crypto.randomUUID().slice(0, 12);
+        const { error: updateError } = await supabase
+          .from('jobs')
+          .update({ is_public: true, share_token: token })
+          .eq('id', jobId);
+
+        if (updateError) {
+          return NextResponse.json(
+            { error: 'Failed to share job' },
+            { status: 500 }
+          );
+        }
+
+        return NextResponse.json({ 
+          is_public: true, 
+          share_token: token,
+          share_url: `/share/${token}`
+        });
+      }
+
+      return NextResponse.json({ 
+        is_public: true, 
+        share_token: data,
+        share_url: `/share/${data}`
+      });
+    } else if (action === 'unshare') {
+      const { error: unshareError } = await supabase.rpc('unshare_job', { job_uuid: jobId });
+      
+      if (unshareError) {
+        const { error: updateError } = await supabase
+          .from('jobs')
+          .update({ is_public: false, share_token: null })
+          .eq('id', jobId);
+
+        if (updateError) {
+          return NextResponse.json(
+            { error: 'Failed to unshare job' },
+            { status: 500 }
+          );
+        }
+      }
+
+      return NextResponse.json({ is_public: false, share_token: null });
+    }
+
+    return NextResponse.json(
+      { error: 'Invalid action' },
+      { status: 400 }
+    );
+  } catch (error) {
+    console.error('Failed to update job:', error);
+    return NextResponse.json(
+      { error: 'Failed to update job' },
       { status: 500 }
     );
   }
