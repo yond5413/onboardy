@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Loader2, Send, User, Bot, AlertCircle } from 'lucide-react';
+import type { GraphContext } from '@/app/lib/types';
 
 interface ChatMessage {
   id: string;
@@ -17,15 +18,31 @@ interface ChatMessage {
 interface ChatPanelProps {
   jobId: string;
   isCompleted: boolean;
+  initialMessage?: string;
+  graphContext?: GraphContext;
 }
 
-export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
+export function ChatPanel({ jobId, isCompleted, initialMessage, graphContext }: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [activeGraphContext, setActiveGraphContext] = useState<GraphContext | undefined>(graphContext);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Update input and context when props change
+  useEffect(() => {
+    if (initialMessage && initialMessage !== input) {
+      setInput(initialMessage);
+    }
+  }, [initialMessage]);
+
+  useEffect(() => {
+    if (graphContext) {
+      setActiveGraphContext(graphContext);
+    }
+  }, [graphContext]);
 
   useEffect(() => {
     if (isCompleted && jobId) {
@@ -75,7 +92,10 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
       const response = await fetch(`/api/jobs/${jobId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ 
+          message,
+          graphContext: activeGraphContext,
+        }),
       });
 
       if (!response.ok) {
@@ -107,6 +127,7 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
       setMessages(prev => prev.filter(m => m.id !== tempId));
     } finally {
       setIsLoading(false);
+      setActiveGraphContext(undefined);
     }
   };
 
@@ -199,6 +220,11 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
       )}
 
       <CardContent className="pt-3">
+        {activeGraphContext && (
+          <div className="mb-2 px-2 py-1 text-xs text-muted-foreground bg-muted/50 rounded">
+            Based on: {activeGraphContext.nodeLabel}
+          </div>
+        )}
         <form onSubmit={sendMessage} className="flex gap-2">
           <Input
             placeholder="Ask about the codebase..."

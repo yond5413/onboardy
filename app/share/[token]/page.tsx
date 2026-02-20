@@ -146,7 +146,7 @@ export default function SharePage() {
                 <CardTitle>System Design Document</CardTitle>
               </CardHeader>
               <CardContent>
-                <MarkdownRenderer content={job.markdown_content} />
+                <MarkdownRenderer content={job.markdown_content || ''} />
               </CardContent>
             </Card>
           </TabsContent>

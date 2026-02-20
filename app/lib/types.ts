@@ -110,6 +110,14 @@ export interface RepoContext {
   };
 }
 
+export interface GraphContext {
+  nodeId: string;
+  nodeLabel: string;
+  nodeType: string;
+  relatedEdges: string[];
+  neighborNodes: string[];
+}
+
 export interface SystemDesign {
   overview: string;
   techStack: string[];

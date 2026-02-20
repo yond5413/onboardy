@@ -80,11 +80,19 @@ export async function POST(
       );
     }
 
-    const { message } = await request.json();
+    const { message, graphContext } = await request.json();
 
     if (!message || typeof message !== 'string') {
       return NextResponse.json(
         { error: 'Message is required' },
+        { status: 400 }
+      );
+    }
+
+    // Validate graphContext if provided
+    if (graphContext && typeof graphContext !== 'object') {
+      return NextResponse.json(
+        { error: 'Invalid graphContext format' },
         { status: 400 }
       );
     }
@@ -114,11 +122,12 @@ export async function POST(
       contextFiles: msg.context_files || [],
     }));
 
-    // Save user message
+    // Save user message with graph context
     await supabase.from('job_chats').insert({
       job_id: jobId,
       role: 'user',
       content: message,
+      graph_context: graphContext || null,
     });
 
     // Call chat agent
