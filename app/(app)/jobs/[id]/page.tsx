@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -39,8 +39,11 @@ import { SandboxExplorer } from '@/app/components/SandboxExplorer';
 import { AgentLogStream } from '@/app/components/AgentLogStream';
 import { ChatPanel } from '@/app/components/ChatPanel';
 import { NodeActionsMenu } from '@/app/components/NodeActionsMenu';
+import { DiagramQualityPanel } from '@/app/components/DiagramQualityPanel';
 import type { GraphContext } from '@/app/lib/types';
 import type { Node, Edge } from '@xyflow/react';
+import type { ReactFlowNode, ReactFlowEdge } from '@/app/lib/types';
+import { evaluateArchitectureDiagramQuality } from '@/app/lib/diagram-quality';
 import { PodcastSettingsModal } from '@/components/podcast-settings-modal';
 import { OwnerList } from '@/components/owner-badge';
 import {
@@ -356,6 +359,19 @@ export default function JobDetailPage() {
     failed: 'bg-red-500/10 text-red-500 border-red-500/20',
   };
 
+  const architectureNodes = useMemo(
+    () => ((job?.react_flow_data?.architecture?.nodes ?? []) as ReactFlowNode[]),
+    [job?.react_flow_data]
+  );
+  const architectureEdges = useMemo(
+    () => ((job?.react_flow_data?.architecture?.edges ?? []) as ReactFlowEdge[]),
+    [job?.react_flow_data]
+  );
+  const qualityReport = useMemo(
+    () => evaluateArchitectureDiagramQuality(architectureNodes, architectureEdges),
+    [architectureNodes, architectureEdges]
+  );
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -568,6 +584,9 @@ export default function JobDetailPage() {
                   <CardTitle>Architecture Diagram</CardTitle>
                 </CardHeader>
                 <CardContent>
+                  {architectureNodes.length > 0 && (
+                    <DiagramQualityPanel report={qualityReport} className="mb-4" />
+                  )}
                   {job.react_flow_data?.architecture?.nodes?.length > 0 ? (
                     <div className="h-[600px] border rounded-lg overflow-hidden relative">
                       <ArchitectureDiagram
@@ -604,20 +623,6 @@ export default function JobDetailPage() {
                   ) : (
                     <div className="text-center py-12 text-muted-foreground">
                       No architecture diagram available
-                    </div>
-                  )}
-
-                  {selectedArchitectureNode && (
-                    <div className="mt-4 rounded-lg border p-4 space-y-3">
-                      <p className="text-sm text-muted-foreground">
-                        Selected node: <span className="font-medium text-foreground">{String(selectedArchitectureNode.data?.label || selectedArchitectureNode.id)}</span>
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        <Button size="sm" variant="outline" onClick={() => startGraphContextChat('explain')}>Explain</Button>
-                        <Button size="sm" variant="outline" onClick={() => startGraphContextChat('trace')}>Trace Flow</Button>
-                        <Button size="sm" variant="outline" onClick={() => startGraphContextChat('debug')}>Where to Debug</Button>
-                        <Button size="sm" variant="outline" onClick={() => startGraphContextChat('files')}>Files to Read</Button>
-                      </div>
                     </div>
                   )}
 

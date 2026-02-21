@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -10,6 +10,9 @@ import mermaid from 'mermaid';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
 import { ArchitectureDiagram } from '@/app/components/ArchitectureDiagram';
 import { AnalysisContextViewer } from '@/app/components/AnalysisContextViewer';
+import { DiagramQualityPanel } from '@/app/components/DiagramQualityPanel';
+import { evaluateArchitectureDiagramQuality } from '@/app/lib/diagram-quality';
+import type { ReactFlowNode, ReactFlowEdge } from '@/app/lib/types';
 
 interface JobData {
   id: string;
@@ -76,6 +79,19 @@ export default function SharePage() {
       }
     }
   }, [job?.markdown_content, activeTab]);
+
+  const architectureNodes = useMemo(
+    () => ((job?.react_flow_data?.architecture?.nodes ?? []) as ReactFlowNode[]),
+    [job?.react_flow_data]
+  );
+  const architectureEdges = useMemo(
+    () => ((job?.react_flow_data?.architecture?.edges ?? []) as ReactFlowEdge[]),
+    [job?.react_flow_data]
+  );
+  const qualityReport = useMemo(
+    () => evaluateArchitectureDiagramQuality(architectureNodes, architectureEdges),
+    [architectureNodes, architectureEdges]
+  );
 
   if (loading) {
     return (
@@ -157,6 +173,9 @@ export default function SharePage() {
                 <CardTitle>Architecture Diagram</CardTitle>
               </CardHeader>
               <CardContent>
+                {architectureNodes.length > 0 && (
+                  <DiagramQualityPanel report={qualityReport} className="mb-4" />
+                )}
                 {job.react_flow_data?.architecture?.nodes?.length > 0 ? (
                   <div className="h-[600px] border rounded-lg overflow-hidden">
                     <ArchitectureDiagram
