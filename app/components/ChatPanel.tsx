@@ -112,7 +112,7 @@ export function ChatPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           message: normalizedMessage,
-          graphContext: activeGraphContext,
+          graphContext: graphContext ?? activeGraphContext,
         }),
       });
 
@@ -121,23 +121,12 @@ export function ChatPanel({
         throw new Error(data.error || 'Failed to send message');
       }
 
-      const data = await response.json();
-
-      // Remove temp message and add real messages
+      // Remove temp message
       setMessages(prev => prev.filter(m => m.id !== tempId));
 
-      setMessages(prev => [...prev, {
-        id: `user-${Date.now()}`,
-        role: 'user',
-        content: normalizedMessage,
-        created_at: new Date().toISOString(),
-      }, {
-        id: `assistant-${Date.now()}`,
-        role: 'assistant',
-        content: data.response,
-        context_files: data.contextFiles,
-        created_at: new Date().toISOString(),
-      }]);
+      // Reload chat history to get messages with database IDs
+      // This prevents duplicates by ensuring all messages use consistent IDs
+      await loadChatHistory();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message');
       // Remove temp message on error

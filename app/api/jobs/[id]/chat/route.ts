@@ -1,13 +1,42 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/app/lib/supabase/server';
 import { resumeSandbox } from '@/app/lib/blaxel';
-import { chatWithAgent, type ChatMessage } from '@/app/lib/chat-agent';
-import type { GraphContext } from '@/app/lib/types';
+import { chatWithAgent, ChatAgentError, type ChatMessage } from '@/app/lib/chat-agent';
 import type { SandboxInstance } from '@blaxel/core';
 
 const IDLE_TIMEOUT_MS = 30000; // 30 seconds
 
 const idleTimers: Map<string, NodeJS.Timeout> = new Map();
+
+function toChatErrorResponse(error: ChatAgentError) {
+  switch (error.code) {
+    case 'MISSING_API_KEY':
+      return NextResponse.json(
+        { error: 'Chat service is not configured (missing BL_API_KEY).' },
+        { status: 500 }
+      );
+    case 'SANDBOX_NOT_AVAILABLE':
+      return NextResponse.json(
+        { error: 'Sandbox is unavailable. Please retry in a moment.' },
+        { status: 503 }
+      );
+    case 'SANDBOX_METADATA_URL_MISSING':
+      return NextResponse.json(
+        { error: 'Sandbox is not properly initialized. Please restart the analysis and try again.' },
+        { status: 500 }
+      );
+    case 'AGENT_NO_RESPONSE':
+      return NextResponse.json(
+        { error: 'Chat agent returned an empty response. Please retry your message.' },
+        { status: 502 }
+      );
+    default:
+      return NextResponse.json(
+        { error: 'Failed to process chat message' },
+        { status: 500 }
+      );
+  }
+}
 
 function clearIdleTimer(jobId: string) {
   const timer = idleTimers.get(jobId);
@@ -97,16 +126,29 @@ export async function POST(
         { status: 400 }
       );
     }
-
-    // Resume sandbox if paused
-    let sandbox: SandboxInstance;
-    if (job.sandbox_paused) {
-      console.log(`[Chat] Resuming sandbox for job ${jobId}`);
-      sandbox = await resumeSandbox(job.sandbox_name);
-      await supabase.from('jobs').update({ sandbox_paused: false }).eq('id', jobId);
+    if (graphContext) {
+      console.log(
+        `[Chat] Graph context for ${jobId}: node=${graphContext.nodeId || 'unknown'} action=${graphContext.action || 'general'}`
+      );
     }
 
-    // Get conversation history
+    // Ensure sandbox is available for chat
+    if (job.sandbox_paused) {
+      console.log(`[Chat] Resuming paused sandbox for job ${jobId}`);
+      await supabase.from('jobs').update({ sandbox_paused: false }).eq('id', jobId);
+    }
+    console.log(`[Chat] Ensuring sandbox is available for job ${jobId}`);
+    const sandbox: SandboxInstance = await resumeSandbox(job.sandbox_name);
+
+    // Validate sandbox has required metadata
+    if (!sandbox.metadata?.url) {
+      console.error(`[Chat] Sandbox ${job.sandbox_name} is missing metadata URL`);
+      return NextResponse.json(
+        { error: 'Sandbox is not properly initialized. Please try again or restart the analysis.' },
+        { status: 500 }
+      );
+    }
+    console.log(`[Chat] Sandbox MCP URL ready for ${jobId}: ${sandbox.metadata.url}/mcp`);
 
     // Get conversation history
     const { data: chatHistory, error: historyError } = await supabase
@@ -117,6 +159,9 @@ export async function POST(
 
     if (historyError) {
       console.error('[Chat] Failed to load history:', historyError);
+      console.error('[Chat] History error details:', JSON.stringify(historyError));
+      // Continue with empty history rather than failing the request
+      // This allows chat to work even if history loading fails
     }
 
     const conversationHistory: ChatMessage[] = (chatHistory || []).map(msg => ({
@@ -124,6 +169,8 @@ export async function POST(
       content: msg.content,
       contextFiles: msg.context_files || [],
     }));
+
+    console.log(`[Chat] Loaded ${conversationHistory.length} messages from history`);
 
     // Save user message with graph context
     await supabase.from('job_chats').insert({
@@ -139,7 +186,11 @@ export async function POST(
       jobId,
       message,
       conversationHistory,
-      job.markdown_content?.substring(0, 2000)
+      job.markdown_content?.substring(0, 2000),
+      graphContext
+    );
+    console.log(
+      `[Chat] Agent response complete for ${jobId}. Referenced context files: ${result.contextFiles.length}`
     );
 
     // Save assistant response
@@ -158,6 +209,10 @@ export async function POST(
       contextFiles: result.contextFiles,
     });
   } catch (error) {
+    if (error instanceof ChatAgentError) {
+      console.error('[Chat] Agent configuration/runtime error:', error.code, error.message, error.details);
+      return toChatErrorResponse(error);
+    }
     console.error('Chat error:', error);
     return NextResponse.json(
       { error: 'Failed to process chat message' },
