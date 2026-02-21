@@ -1,6 +1,6 @@
 'use client';
 
-import { memo } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { NodeProps, Handle, Position, ReactFlow, Background, Controls, MiniMap, BackgroundVariant, useNodesState, useEdgesState } from '@xyflow/react';
 import type { Node, Edge, NodeTypes } from '@xyflow/react';
 
@@ -11,6 +11,143 @@ export interface DiagramNodeData extends Record<string, unknown> {
   description?: string;
   details?: Record<string, string>;
   nodeType?: 'service' | 'database' | 'client' | 'external' | 'gateway';
+}
+
+const MAX_DESCRIPTION_LENGTH = 72;
+const COLUMN_GAP = 320;
+const ROW_GAP = 130;
+
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, maxLength - 1)}…`;
+}
+
+function getNodeTypeOrder(nodeType?: DiagramNodeData['nodeType']): number {
+  switch (nodeType) {
+    case 'client':
+      return 0;
+    case 'gateway':
+      return 1;
+    case 'service':
+      return 2;
+    case 'database':
+      return 3;
+    case 'external':
+      return 4;
+    default:
+      return 2;
+  }
+}
+
+function getOutgoingMap(edges: Edge[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (!map.has(edge.source)) map.set(edge.source, []);
+    map.get(edge.source)!.push(edge.target);
+  }
+  return map;
+}
+
+function getInDegreeMap(nodes: Node<DiagramNodeData>[], edges: Edge[]): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const node of nodes) map.set(node.id, 0);
+  for (const edge of edges) map.set(edge.target, (map.get(edge.target) ?? 0) + 1);
+  return map;
+}
+
+function computeDepthByFlow(nodes: Node<DiagramNodeData>[], edges: Edge[]): Map<string, number> {
+  const inDegree = getInDegreeMap(nodes, edges);
+  const outgoing = getOutgoingMap(edges);
+  const depth = new Map<string, number>();
+  const queue: string[] = [];
+
+  for (const node of nodes) {
+    if ((inDegree.get(node.id) ?? 0) === 0) {
+      queue.push(node.id);
+      depth.set(node.id, 0);
+    }
+  }
+
+  while (queue.length) {
+    const current = queue.shift()!;
+    const currentDepth = depth.get(current) ?? 0;
+    const children = outgoing.get(current) ?? [];
+    for (const childId of children) {
+      depth.set(childId, Math.max(depth.get(childId) ?? 0, currentDepth + 1));
+      inDegree.set(childId, (inDegree.get(childId) ?? 1) - 1);
+      if ((inDegree.get(childId) ?? 0) === 0) queue.push(childId);
+    }
+  }
+
+  return depth;
+}
+
+function normalizeArchitectureLayout(
+  nodes: Node<DiagramNodeData>[],
+  edges: Edge[]
+): Node<DiagramNodeData>[] {
+  if (!nodes.length) return nodes;
+
+  const depthByNode = computeDepthByFlow(nodes, edges);
+  const degreeMap = new Map<string, number>();
+  for (const node of nodes) degreeMap.set(node.id, 0);
+  for (const edge of edges) {
+    degreeMap.set(edge.source, (degreeMap.get(edge.source) ?? 0) + 1);
+    degreeMap.set(edge.target, (degreeMap.get(edge.target) ?? 0) + 1);
+  }
+
+  const columns = new Map<number, Node<DiagramNodeData>[]>();
+  for (const node of nodes) {
+    const inferredDepth = depthByNode.get(node.id);
+    const fallbackDepth = getNodeTypeOrder(node.data?.nodeType);
+    const column = inferredDepth ?? fallbackDepth;
+    if (!columns.has(column)) columns.set(column, []);
+    columns.get(column)!.push(node);
+  }
+
+  const sortedColumns = [...columns.entries()].sort((a, b) => a[0] - b[0]);
+  const allRows = sortedColumns.map(([, list]) => list.length);
+  const maxRows = Math.max(...allRows, 1);
+
+  return sortedColumns.flatMap(([columnIndex, columnNodes]) => {
+    const sorted = [...columnNodes].sort((a, b) => {
+      const typeDiff = getNodeTypeOrder(a.data?.nodeType) - getNodeTypeOrder(b.data?.nodeType);
+      if (typeDiff !== 0) return typeDiff;
+      const degreeDiff = (degreeMap.get(b.id) ?? 0) - (degreeMap.get(a.id) ?? 0);
+      if (degreeDiff !== 0) return degreeDiff;
+      return String(a.data?.label ?? a.id).localeCompare(String(b.data?.label ?? b.id));
+    });
+
+    const topOffset = ((maxRows - sorted.length) * ROW_GAP) / 2;
+    return sorted.map((node, rowIndex) => ({
+      ...node,
+      position: {
+        x: columnIndex * COLUMN_GAP,
+        y: topOffset + rowIndex * ROW_GAP,
+      },
+      draggable: false,
+    }));
+  });
+}
+
+function normalizeArchitectureEdges(edges: Edge[]): Edge[] {
+  return edges.map((edge) => ({
+    ...edge,
+    animated: false,
+    type: 'smoothstep',
+    label: typeof edge.label === 'string' ? truncateText(edge.label, 20) : undefined,
+    labelStyle: {
+      fontSize: 10,
+      fill: '#94a3b8',
+      fontWeight: 500,
+    },
+    style: {
+      strokeWidth: 1.75,
+      stroke: '#64748b',
+      opacity: 0.9,
+      ...(edge.style || {}),
+    },
+  }));
 }
 
 interface LegendItem {
@@ -49,6 +186,7 @@ function Legend() {
 // Custom node components with styling for each type
 const ServiceNode = memo(function ServiceNode({ data, selected }: NodeProps) {
   const nodeData = data as DiagramNodeData;
+  const description = nodeData.description ? truncateText(nodeData.description, MAX_DESCRIPTION_LENGTH) : undefined;
   return (
     <div
       className={`px-4 py-3 rounded-lg border-2 shadow-lg min-w-[160px] text-center transition-all ${
@@ -59,8 +197,8 @@ const ServiceNode = memo(function ServiceNode({ data, selected }: NodeProps) {
     >
       <Handle type="target" position={Position.Left} className="!bg-blue-400 !w-3 !h-3" />
       <div className="text-blue-100 font-semibold text-sm tracking-wide">{nodeData.label}</div>
-      {nodeData.description && (
-        <div className="text-blue-300/80 text-xs mt-1.5 font-normal">{nodeData.description}</div>
+      {description && (
+        <div className="text-blue-300/80 text-xs mt-1.5 font-normal">{description}</div>
       )}
       <Handle type="source" position={Position.Right} className="!bg-blue-400 !w-3 !h-3" />
     </div>
@@ -69,6 +207,7 @@ const ServiceNode = memo(function ServiceNode({ data, selected }: NodeProps) {
 
 const DatabaseNode = memo(function DatabaseNode({ data, selected }: NodeProps) {
   const nodeData = data as DiagramNodeData;
+  const description = nodeData.description ? truncateText(nodeData.description, MAX_DESCRIPTION_LENGTH) : undefined;
   return (
     <div
       className={`px-4 py-3 rounded-lg border-2 shadow-lg min-w-[160px] text-center transition-all ${
@@ -79,8 +218,8 @@ const DatabaseNode = memo(function DatabaseNode({ data, selected }: NodeProps) {
     >
       <Handle type="target" position={Position.Left} className="!bg-emerald-400 !w-3 !h-3" />
       <div className="text-emerald-100 font-semibold text-sm tracking-wide">{nodeData.label}</div>
-      {nodeData.description && (
-        <div className="text-emerald-300/80 text-xs mt-1.5 font-normal">{nodeData.description}</div>
+      {description && (
+        <div className="text-emerald-300/80 text-xs mt-1.5 font-normal">{description}</div>
       )}
       <Handle type="source" position={Position.Right} className="!bg-emerald-400 !w-3 !h-3" />
     </div>
@@ -89,6 +228,7 @@ const DatabaseNode = memo(function DatabaseNode({ data, selected }: NodeProps) {
 
 const ClientNode = memo(function ClientNode({ data, selected }: NodeProps) {
   const nodeData = data as DiagramNodeData;
+  const description = nodeData.description ? truncateText(nodeData.description, MAX_DESCRIPTION_LENGTH) : undefined;
   return (
     <div
       className={`px-4 py-3 rounded-lg border-2 shadow-lg min-w-[160px] text-center transition-all ${
@@ -99,8 +239,8 @@ const ClientNode = memo(function ClientNode({ data, selected }: NodeProps) {
     >
       <Handle type="target" position={Position.Left} className="!bg-purple-400 !w-3 !h-3" />
       <div className="text-purple-100 font-semibold text-sm tracking-wide">{nodeData.label}</div>
-      {nodeData.description && (
-        <div className="text-purple-300/80 text-xs mt-1.5 font-normal">{nodeData.description}</div>
+      {description && (
+        <div className="text-purple-300/80 text-xs mt-1.5 font-normal">{description}</div>
       )}
       <Handle type="source" position={Position.Right} className="!bg-purple-400 !w-3 !h-3" />
     </div>
@@ -109,6 +249,7 @@ const ClientNode = memo(function ClientNode({ data, selected }: NodeProps) {
 
 const ExternalNode = memo(function ExternalNode({ data, selected }: NodeProps) {
   const nodeData = data as DiagramNodeData;
+  const description = nodeData.description ? truncateText(nodeData.description, MAX_DESCRIPTION_LENGTH) : undefined;
   return (
     <div
       className={`px-4 py-3 rounded-lg border-2 shadow-lg min-w-[160px] text-center transition-all ${
@@ -119,8 +260,8 @@ const ExternalNode = memo(function ExternalNode({ data, selected }: NodeProps) {
     >
       <Handle type="target" position={Position.Left} className="!bg-orange-400 !w-3 !h-3" />
       <div className="text-orange-100 font-semibold text-sm tracking-wide">{nodeData.label}</div>
-      {nodeData.description && (
-        <div className="text-orange-300/80 text-xs mt-1.5 font-normal">{nodeData.description}</div>
+      {description && (
+        <div className="text-orange-300/80 text-xs mt-1.5 font-normal">{description}</div>
       )}
       <Handle type="source" position={Position.Right} className="!bg-orange-400 !w-3 !h-3" />
     </div>
@@ -129,6 +270,7 @@ const ExternalNode = memo(function ExternalNode({ data, selected }: NodeProps) {
 
 const GatewayNode = memo(function GatewayNode({ data, selected }: NodeProps) {
   const nodeData = data as DiagramNodeData;
+  const description = nodeData.description ? truncateText(nodeData.description, MAX_DESCRIPTION_LENGTH) : undefined;
   return (
     <div
       className={`px-4 py-3 rounded-lg border-2 shadow-lg min-w-[160px] text-center transition-all ${
@@ -139,8 +281,8 @@ const GatewayNode = memo(function GatewayNode({ data, selected }: NodeProps) {
     >
       <Handle type="target" position={Position.Left} className="!bg-red-400 !w-3 !h-3" />
       <div className="text-red-100 font-semibold text-sm tracking-wide">{nodeData.label}</div>
-      {nodeData.description && (
-        <div className="text-red-300/80 text-xs mt-1.5 font-normal">{nodeData.description}</div>
+      {description && (
+        <div className="text-red-300/80 text-xs mt-1.5 font-normal">{description}</div>
       )}
       <Handle type="source" position={Position.Right} className="!bg-red-400 !w-3 !h-3" />
     </div>
@@ -171,8 +313,42 @@ export function ArchitectureDiagram({
   darkMode = true,
   height = '600px',
 }: ArchitectureDiagramProps) {
-  const [nodes, , onNodesChange] = useNodesState(initialNodes);
-  const [edges, , onEdgesChange] = useEdgesState(initialEdges);
+  const normalizedNodes = useMemo(
+    () => normalizeArchitectureLayout(initialNodes, initialEdges),
+    [initialNodes, initialEdges]
+  );
+  const normalizedEdges = useMemo(
+    () => normalizeArchitectureEdges(initialEdges),
+    [initialEdges]
+  );
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(normalizedNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(normalizedEdges);
+  const previousNodeIdsRef = useRef<Set<string>>(
+    new Set(normalizedNodes.map(n => n.id))
+  );
+
+  // Only reset node positions if the node structure actually changed (new/removed nodes)
+  // This preserves user-dragged positions when the same diagram is re-rendered
+  useEffect(() => {
+    const currentNodeIds = new Set(normalizedNodes.map(n => n.id));
+    const previousNodeIds = previousNodeIdsRef.current;
+    
+    // Check if structure changed: different number of nodes or different IDs
+    const structureChanged = 
+      currentNodeIds.size !== previousNodeIds.size ||
+      [...currentNodeIds].some(id => !previousNodeIds.has(id)) ||
+      [...previousNodeIds].some(id => !currentNodeIds.has(id));
+    
+    if (structureChanged) {
+      setNodes(normalizedNodes);
+      previousNodeIdsRef.current = currentNodeIds;
+    }
+  }, [normalizedNodes, setNodes]);
+
+  useEffect(() => {
+    setEdges(normalizedEdges);
+  }, [normalizedEdges, setEdges]);
 
   const handleNodeClick = (_: React.MouseEvent, node: Node<DiagramNodeData>) => {
     if (onNodeClick) {
@@ -208,14 +384,15 @@ export function ArchitectureDiagram({
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
         nodeTypes={nodeTypes}
+        nodesDraggable={true}
         fitView
-        fitViewOptions={{ padding: 0.2, minZoom: 0.1, maxZoom: 1.5 }}
+        fitViewOptions={{ padding: 0.3, minZoom: 0.2, maxZoom: 1.5 }}
         minZoom={0.1}
         maxZoom={2}
         attributionPosition="bottom-right"
         defaultEdgeOptions={{
-          animated: true,
-          style: { strokeWidth: 2 },
+          animated: false,
+          style: { strokeWidth: 1.75, stroke: '#64748b' },
           type: 'smoothstep',
         }}
         style={darkThemeStyles}

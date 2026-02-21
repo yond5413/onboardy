@@ -1,15 +1,25 @@
 export interface JobEvent {
   id: string;
   jobId: string;
-  type: 'progress' | 'status' | 'complete' | 'error' | 'thinking' | 'tool_use';
+  type: 'progress' | 'status' | 'complete' | 'error' | 'thinking' | 'tool_use' | 'stage_start' | 'stage_complete' | 'stage_failed';
   message: string;
   timestamp: number;
+  stage?: string;
+  progress?: number;
 }
 
 const MAX_BUFFER_SIZE = 100;
 
-const eventBuffers: Map<string, JobEvent[]> = new Map();
-const listeners: Map<string, Set<(event: JobEvent) => void>> = new Map();
+// Use globalThis to ensure all Next.js route instances share the same Maps
+declare global {
+  var __jobEventBuffers: Map<string, JobEvent[]> | undefined;
+  var __jobEventListeners: Map<string, Set<(event: JobEvent) => void>> | undefined;
+}
+
+const eventBuffers: Map<string, JobEvent[]> =
+  globalThis.__jobEventBuffers ?? (globalThis.__jobEventBuffers = new Map());
+const listeners: Map<string, Set<(event: JobEvent) => void>> =
+  globalThis.__jobEventListeners ?? (globalThis.__jobEventListeners = new Map());
 
 function generateEventId(): string {
   return Math.random().toString(36).substring(2, 15);
@@ -32,7 +42,9 @@ function getOrCreateListeners(jobId: string): Set<(event: JobEvent) => void> {
 export function emitJobEvent(
   jobId: string,
   type: JobEvent['type'],
-  message: string
+  message: string,
+  stage?: string,
+  progress?: number
 ): void {
   const event: JobEvent = {
     id: generateEventId(),
@@ -40,6 +52,8 @@ export function emitJobEvent(
     type,
     message,
     timestamp: Date.now(),
+    stage,
+    progress,
   };
 
   const buffer = getOrCreateBuffer(jobId);
@@ -87,4 +101,10 @@ export const JobEvents = {
     emitJobEvent(jobId, 'tool_use', `[Tool: ${toolName}]${input ? ` - ${input.substring(0, 100)}` : ''}`),
   emitComplete: (jobId: string) => emitJobEvent(jobId, 'complete', 'Analysis complete!'),
   emitError: (jobId: string, error: string) => emitJobEvent(jobId, 'error', error),
+  emitStageStart: (jobId: string, stage: string, message: string) => 
+    emitJobEvent(jobId, 'stage_start', message, stage),
+  emitStageComplete: (jobId: string, stage: string, message: string) => 
+    emitJobEvent(jobId, 'stage_complete', message, stage),
+  emitStageFailed: (jobId: string, stage: string, message: string) => 
+    emitJobEvent(jobId, 'stage_failed', message, stage),
 };

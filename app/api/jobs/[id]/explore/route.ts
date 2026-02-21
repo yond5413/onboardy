@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
+import { createClient } from '@/app/lib/supabase/server';
 import { jobStore } from '@/app/lib/jobs';
 import { SandboxInstance } from '@blaxel/core';
+import { cloneRepoToSandbox } from '@/app/lib/blaxel';
 
 // Types for exploration actions
 type ExploreAction = 'read' | 'glob' | 'grep';
@@ -76,6 +78,40 @@ export async function POST(
         { success: false, error: `Failed to access sandbox: ${error instanceof Error ? error.message : 'Unknown error'}` },
         { status: 500 }
       );
+    }
+
+    // Check if /repo exists and has files - if not, clone the repo
+    try {
+      const repoCheck = await sandbox.process.exec({
+        command: 'ls -la /repo 2>&1',
+        timeout: 10000,
+      });
+      
+      const isEmpty = !repoCheck.stdout || 
+                     repoCheck.stdout.includes('total 0') || 
+                     repoCheck.stdout.includes('No such file or directory');
+      
+      if (isEmpty) {
+        // Fetch github_url from Supabase
+        const supabase = await createClient();
+        const { data: jobData } = await supabase
+          .from('jobs')
+          .select('github_url')
+          .eq('id', jobId)
+          .single();
+        
+        if (jobData?.github_url) {
+          console.log(`[Explore] /repo is empty, cloning repository from ${jobData.github_url}...`);
+          const cloneResult = await cloneRepoToSandbox(sandbox, jobData.github_url);
+          if (!cloneResult.success) {
+            console.error(`[Explore] Failed to clone repo:`, cloneResult.error);
+          } else {
+            console.log(`[Explore] Repository cloned successfully`);
+          }
+        }
+      }
+    } catch (repoError) {
+      console.error(`[Explore] Failed to check /repo:`, repoError);
     }
 
     // Execute the requested action

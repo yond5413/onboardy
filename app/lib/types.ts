@@ -110,6 +110,17 @@ export interface RepoContext {
   };
 }
 
+export interface GraphContext {
+  nodeId: string;
+  nodeLabel: string;
+  nodeType: string;
+  filePath?: string;
+  relatedEdges: string[];
+  neighborNodes: string[];
+  relationshipDetails?: string[];
+  action?: 'explain' | 'trace' | 'debug' | 'files';
+}
+
 export interface SystemDesign {
   overview: string;
   techStack: string[];

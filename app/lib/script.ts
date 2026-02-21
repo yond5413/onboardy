@@ -1,5 +1,22 @@
 export type PodcastStyle = 'technical' | 'overview';
 
+export type PodcastDuration = 'quick' | 'standard' | 'detailed';
+export type PodcastTone = 'professional' | 'casual' | 'technical';
+export type PodcastAudience = 'executive' | 'developer' | 'beginner';
+
+export interface PodcastSettings {
+  style: PodcastStyle;
+  duration: PodcastDuration;
+  tone: PodcastTone;
+  audience: PodcastAudience;
+}
+
+export const DURATION_WORDS: Record<PodcastDuration, { min: number; max: number; minutes: number }> = {
+  quick: { min: 200, max: 300, minutes: 2 },
+  standard: { min: 600, max: 900, minutes: 5 },
+  detailed: { min: 1200, max: 1800, minutes: 10 },
+};
+
 interface OpenRouterMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;

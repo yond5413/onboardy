@@ -2,10 +2,20 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SandboxInstance } from '@blaxel/core';
 
 const HAIKU_MODEL = 'claude-haiku-4-5';
+const SANDBOX_ALLOWED_TOOLS = [
+  'mcp__sandbox__codegenListDir',
+  'mcp__sandbox__codegenGrepSearch',
+  'mcp__sandbox__codegenFileSearch',
+  'mcp__sandbox__codegenReadFileRange',
+  'mcp__sandbox__fsReadFile',
+  'mcp__sandbox__fsListDirectory',
+];
 
 const CHAT_SYSTEM_PROMPT = `You are an expert software architect and developer assistant.
 
 Your role is to help users understand and work with their codebase. You have access to the repository files in the sandbox.
+
+IMPORTANT: Output plain text only. Do NOT use markdown formatting (no ## headers, no \`\`\` code blocks, no * bullet points). Use simple paragraphs and numbered lists instead.
 
 Guidelines:
 - Be helpful, clear, and concise
@@ -15,15 +25,58 @@ Guidelines:
 - Don't make assumptions - verify by reading code when needed
 - Provide actionable advice and code examples when relevant`;
 
-const CHAT_PROMPT_TEMPLATE = (question: string, context?: string) => `
+export interface GraphContext {
+  nodeId?: string;
+  nodeLabel?: string;
+  nodeType?: string;
+  filePath?: string;
+  relatedEdges?: string[];
+  neighborNodes?: string[];
+  relationshipDetails?: string[];
+  action?: 'explain' | 'trace' | 'debug' | 'files';
+}
+
+const formatGraphContext = (graphContext?: GraphContext): string => {
+  if (!graphContext) return '';
+
+  const lines = [
+    '=== GRAPH CONTEXT ===',
+    `Node ID: ${graphContext.nodeId || 'unknown'}`,
+    `Node Label: ${graphContext.nodeLabel || 'unknown'}`,
+    `Node Type: ${graphContext.nodeType || 'unknown'}`,
+  ];
+
+  if (graphContext.filePath) {
+    lines.push(`File Path: ${graphContext.filePath}`);
+  }
+
+  if (graphContext.action) {
+    lines.push(`Action: ${graphContext.action}`);
+  }
+
+  if (graphContext.relationshipDetails?.length) {
+    lines.push(`Relationships: ${graphContext.relationshipDetails.join('; ')}`);
+  } else if (graphContext.neighborNodes?.length) {
+    lines.push(`Connected Nodes: ${graphContext.neighborNodes.join(', ')}`);
+  }
+
+  return `${lines.join('\n')}\n`;
+};
+
+const CHAT_PROMPT_TEMPLATE = (question: string, context?: string, graphContext?: GraphContext) => `
 The user is asking about a repository that has been analyzed.
 
-${context ? `## Previous Analysis Context\n${context}\n` : ''}
-
-## User's Question
+${context ? `=== PREVIOUS ANALYSIS CONTEXT ===\n${context}\n` : ''}
+${formatGraphContext(graphContext)}
+=== USER'S QUESTION ===
 ${question}
 
-Please answer the question by exploring the repository files if needed. Use the sandbox MCP tools to read relevant files and provide specific, accurate information.`;
+IMPORTANT: Respond in plain text only. Do NOT use markdown formatting. No headers, no code blocks, no bullet points. Use simple paragraphs and numbered lists like:
+1. First step
+2. Second step
+3. Third step
+
+When showing code, use inline formatting like: function example() { return 'hello' }`;
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -36,21 +89,56 @@ export interface ChatResult {
   contextFiles: string[];
 }
 
+export class ChatAgentError extends Error {
+  constructor(
+    public code:
+      | 'MISSING_API_KEY'
+      | 'SANDBOX_NOT_AVAILABLE'
+      | 'SANDBOX_METADATA_URL_MISSING'
+      | 'AGENT_NO_RESPONSE',
+    message: string,
+    public details?: Record<string, unknown>
+  ) {
+    super(message);
+    this.name = 'ChatAgentError';
+  }
+}
+
 export async function chatWithAgent(
-  sandbox: SandboxInstance,
+  sandbox: SandboxInstance | null | undefined,
   jobId: string,
   question: string,
   conversationHistory: ChatMessage[],
-  context?: string
+  context?: string,
+  graphContext?: GraphContext
 ): Promise<ChatResult> {
   const apiKey = process.env.BL_API_KEY;
   if (!apiKey) {
-    throw new Error('BL_API_KEY environment variable is required');
+    throw new ChatAgentError(
+      'MISSING_API_KEY',
+      'BL_API_KEY environment variable is required'
+    );
   }
 
-  const mcpUrl = `${sandbox.metadata?.url}/mcp`;
-  
-  let rawOutput = '';
+  if (!sandbox) {
+    throw new ChatAgentError(
+      'SANDBOX_NOT_AVAILABLE',
+      'Sandbox is not available for this job.'
+    );
+  }
+
+  if (!sandbox.metadata?.url) {
+    throw new ChatAgentError(
+      'SANDBOX_METADATA_URL_MISSING',
+      'Sandbox metadata URL is missing. The sandbox may not be properly initialized.'
+    );
+  }
+
+  const mcpUrl = `${sandbox.metadata.url}/mcp`;
+  console.log(
+    `[ChatAgent] Starting chat for job ${jobId} with MCP ${mcpUrl} and ${SANDBOX_ALLOWED_TOOLS.length} allowed tools`
+  );
+
   let finalResponse = '';
   const contextFiles: string[] = [];
 
@@ -59,8 +147,8 @@ export async function chatWithAgent(
     .join('\n\n');
 
   const fullPrompt = historyPrompt
-    ? `${historyPrompt}\n\nUser: ${question}`
-    : CHAT_PROMPT_TEMPLATE(question, context);
+    ? `${historyPrompt}\n\n${formatGraphContext(graphContext)}User: ${question}`
+    : CHAT_PROMPT_TEMPLATE(question, context, graphContext);
 
   for await (const message of query({
     prompt: fullPrompt,
@@ -76,16 +164,14 @@ export async function chatWithAgent(
           },
         },
       },
-      tools: [],
-      allowedTools: [],
-      permissionMode: "bypassPermissions",
+      allowedTools: SANDBOX_ALLOWED_TOOLS,
+      permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
     },
   })) {
     if (message.type === 'assistant' && message.message?.content) {
       for (const block of message.message.content) {
         if ('text' in block) {
-          rawOutput += block.text;
           finalResponse += block.text;
         } else if ('name' in block) {
           contextFiles.push(block.name);
@@ -94,6 +180,14 @@ export async function chatWithAgent(
     } else if (message.type === 'result' && message.subtype === 'success') {
       finalResponse = (message as { result?: string }).result || finalResponse;
     }
+  }
+
+  if (!finalResponse.trim()) {
+    throw new ChatAgentError(
+      'AGENT_NO_RESPONSE',
+      'Chat agent did not return a response.',
+      { contextFilesCount: contextFiles.length }
+    );
   }
 
   return {
