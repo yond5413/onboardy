@@ -1,8 +1,10 @@
 'use client';
 
-import { memo, useEffect, useMemo, useRef } from 'react';
-import { NodeProps, Handle, Position, ReactFlow, Background, Controls, MiniMap, BackgroundVariant, useNodesState, useEdgesState } from '@xyflow/react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
+import { NodeProps, Handle, Position, ReactFlow, Background, Controls, MiniMap, BackgroundVariant, Panel, useNodesState, useEdgesState } from '@xyflow/react';
 import type { Node, Edge, NodeTypes } from '@xyflow/react';
+import dagre from '@dagrejs/dagre';
+import { RotateCcw } from 'lucide-react';
 
 import '@xyflow/react/dist/style.css';
 
@@ -14,119 +16,60 @@ export interface DiagramNodeData extends Record<string, unknown> {
 }
 
 const MAX_DESCRIPTION_LENGTH = 72;
-const COLUMN_GAP = 320;
-const ROW_GAP = 130;
+
+/** Estimated node width for dagre layout computation */
+const NODE_WIDTH = 200;
+/** Estimated node height for dagre layout computation */
+const NODE_HEIGHT = 80;
 
 function truncateText(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   return `${value.slice(0, maxLength - 1)}…`;
 }
 
-function getNodeTypeOrder(nodeType?: DiagramNodeData['nodeType']): number {
-  switch (nodeType) {
-    case 'client':
-      return 0;
-    case 'gateway':
-      return 1;
-    case 'service':
-      return 2;
-    case 'database':
-      return 3;
-    case 'external':
-      return 4;
-    default:
-      return 2;
-  }
-}
-
-function getOutgoingMap(edges: Edge[]): Map<string, string[]> {
-  const map = new Map<string, string[]>();
-  for (const edge of edges) {
-    if (!map.has(edge.source)) map.set(edge.source, []);
-    map.get(edge.source)!.push(edge.target);
-  }
-  return map;
-}
-
-function getInDegreeMap(nodes: Node<DiagramNodeData>[], edges: Edge[]): Map<string, number> {
-  const map = new Map<string, number>();
-  for (const node of nodes) map.set(node.id, 0);
-  for (const edge of edges) map.set(edge.target, (map.get(edge.target) ?? 0) + 1);
-  return map;
-}
-
-function computeDepthByFlow(nodes: Node<DiagramNodeData>[], edges: Edge[]): Map<string, number> {
-  const inDegree = getInDegreeMap(nodes, edges);
-  const outgoing = getOutgoingMap(edges);
-  const depth = new Map<string, number>();
-  const queue: string[] = [];
-
-  for (const node of nodes) {
-    if ((inDegree.get(node.id) ?? 0) === 0) {
-      queue.push(node.id);
-      depth.set(node.id, 0);
-    }
-  }
-
-  while (queue.length) {
-    const current = queue.shift()!;
-    const currentDepth = depth.get(current) ?? 0;
-    const children = outgoing.get(current) ?? [];
-    for (const childId of children) {
-      depth.set(childId, Math.max(depth.get(childId) ?? 0, currentDepth + 1));
-      inDegree.set(childId, (inDegree.get(childId) ?? 1) - 1);
-      if ((inDegree.get(childId) ?? 0) === 0) queue.push(childId);
-    }
-  }
-
-  return depth;
-}
-
-function normalizeArchitectureLayout(
+/**
+ * Compute a hierarchical top-to-bottom layout using dagre.
+ * Dagre handles layer assignment, edge-crossing minimization, and node spacing
+ * automatically — producing layouts similar to mermaid flowcharts.
+ */
+function computeDagreLayout(
   nodes: Node<DiagramNodeData>[],
   edges: Edge[]
 ): Node<DiagramNodeData>[] {
   if (!nodes.length) return nodes;
 
-  const depthByNode = computeDepthByFlow(nodes, edges);
-  const degreeMap = new Map<string, number>();
-  for (const node of nodes) degreeMap.set(node.id, 0);
-  for (const edge of edges) {
-    degreeMap.set(edge.source, (degreeMap.get(edge.source) ?? 0) + 1);
-    degreeMap.set(edge.target, (degreeMap.get(edge.target) ?? 0) + 1);
-  }
+  const g = new dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
 
-  const columns = new Map<number, Node<DiagramNodeData>[]>();
+  g.setGraph({
+    rankdir: 'TB',
+    nodesep: 80,
+    ranksep: 100,
+    marginx: 40,
+    marginy: 40,
+  });
+
   for (const node of nodes) {
-    const inferredDepth = depthByNode.get(node.id);
-    const fallbackDepth = getNodeTypeOrder(node.data?.nodeType);
-    const column = inferredDepth ?? fallbackDepth;
-    if (!columns.has(column)) columns.set(column, []);
-    columns.get(column)!.push(node);
+    g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
   }
 
-  const sortedColumns = [...columns.entries()].sort((a, b) => a[0] - b[0]);
-  const allRows = sortedColumns.map(([, list]) => list.length);
-  const maxRows = Math.max(...allRows, 1);
+  for (const edge of edges) {
+    g.setEdge(edge.source, edge.target);
+  }
 
-  return sortedColumns.flatMap(([columnIndex, columnNodes]) => {
-    const sorted = [...columnNodes].sort((a, b) => {
-      const typeDiff = getNodeTypeOrder(a.data?.nodeType) - getNodeTypeOrder(b.data?.nodeType);
-      if (typeDiff !== 0) return typeDiff;
-      const degreeDiff = (degreeMap.get(b.id) ?? 0) - (degreeMap.get(a.id) ?? 0);
-      if (degreeDiff !== 0) return degreeDiff;
-      return String(a.data?.label ?? a.id).localeCompare(String(b.data?.label ?? b.id));
-    });
+  dagre.layout(g);
 
-    const topOffset = ((maxRows - sorted.length) * ROW_GAP) / 2;
-    return sorted.map((node, rowIndex) => ({
+  return nodes.map((node) => {
+    const dagreNode = g.node(node.id);
+    return {
       ...node,
+      // Dagre positions are center-anchored; shift to top-left for React Flow
       position: {
-        x: columnIndex * COLUMN_GAP,
-        y: topOffset + rowIndex * ROW_GAP,
+        x: dagreNode.x - NODE_WIDTH / 2,
+        y: dagreNode.y - NODE_HEIGHT / 2,
       },
-      draggable: false,
-    }));
+      targetPosition: Position.Top,
+      sourcePosition: Position.Bottom,
+    };
   });
 }
 
@@ -195,12 +138,12 @@ const ServiceNode = memo(function ServiceNode({ data, selected }: NodeProps) {
           : 'border-blue-600 bg-blue-950 hover:bg-blue-900/50'
       }`}
     >
-      <Handle type="target" position={Position.Left} className="!bg-blue-400 !w-3 !h-3" />
+      <Handle type="target" position={Position.Top} className="!bg-blue-400 !w-3 !h-3" />
       <div className="text-blue-100 font-semibold text-sm tracking-wide">{nodeData.label}</div>
       {description && (
         <div className="text-blue-300/80 text-xs mt-1.5 font-normal">{description}</div>
       )}
-      <Handle type="source" position={Position.Right} className="!bg-blue-400 !w-3 !h-3" />
+      <Handle type="source" position={Position.Bottom} className="!bg-blue-400 !w-3 !h-3" />
     </div>
   );
 });
@@ -216,12 +159,12 @@ const DatabaseNode = memo(function DatabaseNode({ data, selected }: NodeProps) {
           : 'border-emerald-600 bg-emerald-950 hover:bg-emerald-900/50'
       }`}
     >
-      <Handle type="target" position={Position.Left} className="!bg-emerald-400 !w-3 !h-3" />
+      <Handle type="target" position={Position.Top} className="!bg-emerald-400 !w-3 !h-3" />
       <div className="text-emerald-100 font-semibold text-sm tracking-wide">{nodeData.label}</div>
       {description && (
         <div className="text-emerald-300/80 text-xs mt-1.5 font-normal">{description}</div>
       )}
-      <Handle type="source" position={Position.Right} className="!bg-emerald-400 !w-3 !h-3" />
+      <Handle type="source" position={Position.Bottom} className="!bg-emerald-400 !w-3 !h-3" />
     </div>
   );
 });
@@ -237,12 +180,12 @@ const ClientNode = memo(function ClientNode({ data, selected }: NodeProps) {
           : 'border-purple-600 bg-purple-950 hover:bg-purple-900/50'
       }`}
     >
-      <Handle type="target" position={Position.Left} className="!bg-purple-400 !w-3 !h-3" />
+      <Handle type="target" position={Position.Top} className="!bg-purple-400 !w-3 !h-3" />
       <div className="text-purple-100 font-semibold text-sm tracking-wide">{nodeData.label}</div>
       {description && (
         <div className="text-purple-300/80 text-xs mt-1.5 font-normal">{description}</div>
       )}
-      <Handle type="source" position={Position.Right} className="!bg-purple-400 !w-3 !h-3" />
+      <Handle type="source" position={Position.Bottom} className="!bg-purple-400 !w-3 !h-3" />
     </div>
   );
 });
@@ -258,12 +201,12 @@ const ExternalNode = memo(function ExternalNode({ data, selected }: NodeProps) {
           : 'border-orange-600 bg-orange-950 hover:bg-orange-900/50'
       }`}
     >
-      <Handle type="target" position={Position.Left} className="!bg-orange-400 !w-3 !h-3" />
+      <Handle type="target" position={Position.Top} className="!bg-orange-400 !w-3 !h-3" />
       <div className="text-orange-100 font-semibold text-sm tracking-wide">{nodeData.label}</div>
       {description && (
         <div className="text-orange-300/80 text-xs mt-1.5 font-normal">{description}</div>
       )}
-      <Handle type="source" position={Position.Right} className="!bg-orange-400 !w-3 !h-3" />
+      <Handle type="source" position={Position.Bottom} className="!bg-orange-400 !w-3 !h-3" />
     </div>
   );
 });
@@ -279,12 +222,12 @@ const GatewayNode = memo(function GatewayNode({ data, selected }: NodeProps) {
           : 'border-red-600 bg-red-950 hover:bg-red-900/50'
       }`}
     >
-      <Handle type="target" position={Position.Left} className="!bg-red-400 !w-3 !h-3" />
+      <Handle type="target" position={Position.Top} className="!bg-red-400 !w-3 !h-3" />
       <div className="text-red-100 font-semibold text-sm tracking-wide">{nodeData.label}</div>
       {description && (
         <div className="text-red-300/80 text-xs mt-1.5 font-normal">{description}</div>
       )}
-      <Handle type="source" position={Position.Right} className="!bg-red-400 !w-3 !h-3" />
+      <Handle type="source" position={Position.Bottom} className="!bg-red-400 !w-3 !h-3" />
     </div>
   );
 });
@@ -313,48 +256,56 @@ export function ArchitectureDiagram({
   darkMode = true,
   height = '600px',
 }: ArchitectureDiagramProps) {
-  const normalizedNodes = useMemo(
-    () => normalizeArchitectureLayout(initialNodes, initialEdges),
+  const layoutedNodes = useMemo(
+    () => computeDagreLayout(initialNodes, initialEdges),
     [initialNodes, initialEdges]
   );
-  const normalizedEdges = useMemo(
+  const layoutedEdges = useMemo(
     () => normalizeArchitectureEdges(initialEdges),
     [initialEdges]
   );
 
-  const [nodes, setNodes, onNodesChange] = useNodesState(normalizedNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(normalizedEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges);
   const previousNodeIdsRef = useRef<Set<string>>(
-    new Set(normalizedNodes.map(n => n.id))
+    new Set(layoutedNodes.map((n: Node<DiagramNodeData>) => n.id))
   );
 
   // Only reset node positions if the node structure actually changed (new/removed nodes)
   // This preserves user-dragged positions when the same diagram is re-rendered
   useEffect(() => {
-    const currentNodeIds = new Set(normalizedNodes.map(n => n.id));
+    const currentNodeIds = new Set(layoutedNodes.map((n: Node<DiagramNodeData>) => n.id));
     const previousNodeIds = previousNodeIdsRef.current;
     
     // Check if structure changed: different number of nodes or different IDs
     const structureChanged = 
       currentNodeIds.size !== previousNodeIds.size ||
-      [...currentNodeIds].some(id => !previousNodeIds.has(id)) ||
-      [...previousNodeIds].some(id => !currentNodeIds.has(id));
+      [...currentNodeIds].some((id: string) => !previousNodeIds.has(id)) ||
+      [...previousNodeIds].some((id: string) => !currentNodeIds.has(id));
     
     if (structureChanged) {
-      setNodes(normalizedNodes);
+      setNodes(layoutedNodes);
       previousNodeIdsRef.current = currentNodeIds;
     }
-  }, [normalizedNodes, setNodes]);
+  }, [layoutedNodes, setNodes]);
 
   useEffect(() => {
-    setEdges(normalizedEdges);
-  }, [normalizedEdges, setEdges]);
+    setEdges(layoutedEdges);
+  }, [layoutedEdges, setEdges]);
 
-  const handleNodeClick = (_: React.MouseEvent, node: Node<DiagramNodeData>) => {
-    if (onNodeClick) {
-      onNodeClick(node);
-    }
-  };
+  /** Reset all nodes to their dagre-computed positions */
+  const handleResetLayout = useCallback(() => {
+    setNodes(computeDagreLayout(initialNodes, initialEdges));
+  }, [initialNodes, initialEdges, setNodes]);
+
+  const handleNodeClick = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      if (onNodeClick) {
+        onNodeClick(node as Node<DiagramNodeData>);
+      }
+    },
+    [onNodeClick]
+  );
 
   const darkThemeStyles = darkMode
     ? {
@@ -419,6 +370,16 @@ export function ArchitectureDiagram({
           maskColor={darkMode ? 'rgba(15, 23, 42, 0.7)' : 'rgba(255, 255, 255, 0.7)'}
           className="bg-slate-900/80"
         />
+        <Panel position="top-left">
+          <button
+            onClick={handleResetLayout}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md border transition-colors bg-slate-800 text-slate-200 border-slate-600 hover:bg-slate-700 hover:text-slate-100 shadow-sm"
+            title="Reset to auto-layout"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Reset Layout
+          </button>
+        </Panel>
         <Legend />
       </ReactFlow>
     </div>
