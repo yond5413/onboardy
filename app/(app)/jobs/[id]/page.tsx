@@ -631,7 +631,7 @@ export default function JobDetailPage() {
                   </p>
                 </CardHeader>
                 <CardContent>
-                  <MarkdownRenderer content={job.markdown_content} />
+                  <MarkdownRenderer content={job.markdown_content} renderMermaid />
                 </CardContent>
               </Card>
             </TabsContent>
@@ -647,9 +647,9 @@ export default function JobDetailPage() {
                 </CardHeader>
                 <CardContent>
                   {job.markdown_technical_deep_dive ? (
-                    <MarkdownRenderer content={job.markdown_technical_deep_dive} />
+                    <MarkdownRenderer content={job.markdown_technical_deep_dive} renderMermaid />
                   ) : (
-                    <MarkdownRenderer content={job.markdown_content} />
+                    <MarkdownRenderer content={job.markdown_content} renderMermaid />
                   )}
                 </CardContent>
               </Card>
