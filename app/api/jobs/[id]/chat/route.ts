@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/app/lib/supabase/server';
-import { resumeSandbox } from '@/app/lib/blaxel';
+import { resumeSandbox, cloneRepoToSandbox } from '@/app/lib/blaxel';
 import { chatWithAgent, ChatAgentError, type ChatMessage } from '@/app/lib/chat-agent';
 import type { SandboxInstance } from '@blaxel/core';
 
@@ -85,7 +85,7 @@ export async function POST(
 
     const { data: job, error: jobError } = await supabase
       .from('jobs')
-      .select('id, user_id, status, sandbox_name, sandbox_paused, markdown_content, analysis_context')
+      .select('id, user_id, status, sandbox_name, sandbox_paused, github_url, markdown_content, analysis_context')
       .eq('id', jobId)
       .single();
 
@@ -137,7 +137,7 @@ export async function POST(
       console.log(`[Chat] Resuming paused sandbox for job ${jobId}`);
       await supabase.from('jobs').update({ sandbox_paused: false }).eq('id', jobId);
     }
-    console.log(`[Chat] Ensuring sandbox is available for job ${jobId}`);
+    console.log(`[Chat] Resuming sandbox "${job.sandbox_name}" for job ${jobId}`);
     const sandbox: SandboxInstance = await resumeSandbox(job.sandbox_name);
 
     // Validate sandbox has required metadata
@@ -149,6 +149,33 @@ export async function POST(
       );
     }
     console.log(`[Chat] Sandbox MCP URL ready for ${jobId}: ${sandbox.metadata.url}/mcp`);
+
+    // Check if /repo exists and has files - if not, clone the repo
+    console.log(`[Chat] Checking /repo contents for sandbox ${job.sandbox_name}...`);
+    try {
+      const repoCheck = await sandbox.process.exec({
+        command: 'ls -la /repo 2>&1',
+        timeout: 10000,
+      });
+      
+      const isEmpty = !repoCheck.stdout || 
+                     repoCheck.stdout.includes('total 0') || 
+                     repoCheck.stdout.includes('No such file or directory');
+      
+      if (isEmpty && job.github_url) {
+        console.log(`[Chat] /repo is empty, cloning repository from ${job.github_url}...`);
+        const cloneResult = await cloneRepoToSandbox(sandbox, job.github_url);
+        if (!cloneResult.success) {
+          console.error(`[Chat] Failed to clone repo:`, cloneResult.error);
+        } else {
+          console.log(`[Chat] Repository cloned successfully`);
+        }
+      } else {
+        console.log(`[Chat] /repo contents:\n${repoCheck.stdout}`);
+      }
+    } catch (repoError) {
+      console.error(`[Chat] Failed to check /repo:`, repoError);
+    }
 
     // Get conversation history
     const { data: chatHistory, error: historyError } = await supabase

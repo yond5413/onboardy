@@ -29,8 +29,10 @@ export interface GraphContext {
   nodeId?: string;
   nodeLabel?: string;
   nodeType?: string;
+  filePath?: string;
   relatedEdges?: string[];
   neighborNodes?: string[];
+  relationshipDetails?: string[];
   action?: 'explain' | 'trace' | 'debug' | 'files';
 }
 
@@ -42,15 +44,20 @@ const formatGraphContext = (graphContext?: GraphContext): string => {
     `Node ID: ${graphContext.nodeId || 'unknown'}`,
     `Node Label: ${graphContext.nodeLabel || 'unknown'}`,
     `Node Type: ${graphContext.nodeType || 'unknown'}`,
-    `Action: ${graphContext.action || 'general'}`,
   ];
 
-  if (graphContext.relatedEdges?.length) {
-    lines.push(`Related Edges: ${graphContext.relatedEdges.join(', ')}`);
+  if (graphContext.filePath) {
+    lines.push(`File Path: ${graphContext.filePath}`);
   }
 
-  if (graphContext.neighborNodes?.length) {
-    lines.push(`Neighbor Nodes: ${graphContext.neighborNodes.join(', ')}`);
+  if (graphContext.action) {
+    lines.push(`Action: ${graphContext.action}`);
+  }
+
+  if (graphContext.relationshipDetails?.length) {
+    lines.push(`Relationships: ${graphContext.relationshipDetails.join('; ')}`);
+  } else if (graphContext.neighborNodes?.length) {
+    lines.push(`Connected Nodes: ${graphContext.neighborNodes.join(', ')}`);
   }
 
   return `${lines.join('\n')}\n`;

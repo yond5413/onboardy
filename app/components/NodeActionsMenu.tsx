@@ -59,21 +59,46 @@ function buildGraphContext(node: DiagramNode, nodes: DiagramNode[], edges: Diagr
     .map(e => e.id);
 
   const neighborIds = new Set<string>();
+  const relationshipDetails: string[] = [];
+  
   edges.forEach(e => {
-    if (e.source === node.id) neighborIds.add(e.target);
-    if (e.target === node.id) neighborIds.add(e.source);
+    if (e.source === node.id) {
+      neighborIds.add(e.target);
+      relationshipDetails.push(`${node.data.label} → ${e.target}`);
+    }
+    if (e.target === node.id) {
+      neighborIds.add(e.source);
+      relationshipDetails.push(`${e.source} → ${node.data.label}`);
+    }
   });
 
   const neighborNodes = nodes
     .filter(n => neighborIds.has(n.id))
     .map(n => n.data.label);
 
+  // Derive file path from node label
+  // If label looks like a file (e.g., "auth.ts", "UserService.js"), use it directly
+  // Otherwise, create a reasonable path guess
+  const label = node.data.label;
+  let filePath: string | undefined;
+  
+  if (label.match(/\.(ts|tsx|js|jsx|py|go|rs|java|cpp|c|h)$/)) {
+    // Looks like a file - construct path in /repo
+    filePath = `/repo/${label}`;
+  } else if (label.length > 0) {
+    // Could be a service/component name - try common patterns
+    // For now, leave undefined so agent searches
+    filePath = `/repo/${label}`;
+  }
+
   return {
     nodeId: node.id,
-    nodeLabel: node.data.label,
+    nodeLabel: label,
     nodeType: node.data.nodeType || 'service',
+    filePath,
     relatedEdges,
     neighborNodes,
+    relationshipDetails,
   };
 }
 
