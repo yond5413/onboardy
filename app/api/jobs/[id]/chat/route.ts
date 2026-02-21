@@ -2,11 +2,12 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@/app/lib/supabase/server';
 import { resumeSandbox } from '@/app/lib/blaxel';
 import { chatWithAgent, type ChatMessage } from '@/app/lib/chat-agent';
+import type { GraphContext } from '@/app/lib/types';
 import type { SandboxInstance } from '@blaxel/core';
 
 const IDLE_TIMEOUT_MS = 30000; // 30 seconds
 
-let idleTimers: Map<string, NodeJS.Timeout> = new Map();
+const idleTimers: Map<string, NodeJS.Timeout> = new Map();
 
 function clearIdleTimer(jobId: string) {
   const timer = idleTimers.get(jobId);
@@ -104,6 +105,8 @@ export async function POST(
       sandbox = await resumeSandbox(job.sandbox_name);
       await supabase.from('jobs').update({ sandbox_paused: false }).eq('id', jobId);
     }
+
+    // Get conversation history
 
     // Get conversation history
     const { data: chatHistory, error: historyError } = await supabase

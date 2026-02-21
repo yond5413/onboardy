@@ -116,6 +116,7 @@ export interface GraphContext {
   nodeType: string;
   relatedEdges: string[];
   neighborNodes: string[];
+  action?: 'explain' | 'trace' | 'debug' | 'files';
 }
 
 export interface SystemDesign {

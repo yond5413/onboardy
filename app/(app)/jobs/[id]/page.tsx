@@ -97,6 +97,9 @@ export default function JobDetailPage() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingScript, setEditingScript] = useState(false);
   const [editedScript, setEditedScript] = useState('');
+  const [pendingPrompt, setPendingPrompt] = useState('');
+  const [pendingGraphContext, setPendingGraphContext] = useState<GraphContext | undefined>(undefined);
+  const [selectedArchitectureNode, setSelectedArchitectureNode] = useState<Node<DiagramNodeData> | null>(null);
   const mermaidRef = useRef<HTMLDivElement>(null);
 
   // Initialize mermaid
@@ -157,6 +160,51 @@ export default function JobDetailPage() {
       }
     }
   }, [job?.markdown_content, activeTab]);
+
+
+  function handleArchitectureNodeClick(node: Node<DiagramNodeData>) {
+    setSelectedArchitectureNode(node);
+  }
+
+  function startGraphContextChat(action: NonNullable<GraphContext['action']>) {
+    if (!selectedArchitectureNode) return;
+
+    const nodeLabel = String(selectedArchitectureNode.data?.label || selectedArchitectureNode.id);
+    const nodeType = String(selectedArchitectureNode.type || selectedArchitectureNode.data?.nodeType || 'service');
+
+    const actionPromptMap: Record<NonNullable<GraphContext['action']>, string> = {
+      explain: `Explain the ${nodeLabel} component, its responsibilities, and why it exists in this architecture.`,
+      trace: `Trace the data flow and dependencies connected to ${nodeLabel}.`,
+      debug: `If ${nodeLabel} is failing, where should I start debugging and what files should I inspect first?`,
+      files: `List the most important files I should read to understand ${nodeLabel}.`,
+    };
+
+    setPendingPrompt(actionPromptMap[action]);
+    const architectureEdges = job?.react_flow_data?.architecture?.edges || [];
+    const architectureNodes = job?.react_flow_data?.architecture?.nodes || [];
+
+    const relatedEdges = architectureEdges
+      .filter((edge: { id: string; source: string; target: string }) => edge.source === selectedArchitectureNode.id || edge.target === selectedArchitectureNode.id)
+      .map((edge: { id: string }) => edge.id);
+
+    const neighborNodes = architectureEdges
+      .filter((edge: { source: string; target: string }) => edge.source === selectedArchitectureNode.id || edge.target === selectedArchitectureNode.id)
+      .map((edge: { source: string; target: string }) => edge.source === selectedArchitectureNode.id ? edge.target : edge.source)
+      .map((neighborId: string) => {
+        const neighbor = architectureNodes.find((node: { id: string; data?: { label?: string } }) => node.id === neighborId);
+        return neighbor?.data?.label || neighborId;
+      });
+
+    setPendingGraphContext({
+      nodeId: selectedArchitectureNode.id,
+      nodeLabel,
+      nodeType,
+      action,
+      relatedEdges,
+      neighborNodes,
+    });
+    setActiveTab('chat');
+  }
 
   async function handleGeneratePodcast() {
     setGeneratingPodcast(true);
@@ -280,12 +328,15 @@ export default function JobDetailPage() {
 
   const handleNodeClick = (node: Node<DiagramNodeData>) => {
     setSelectedNode(node);
+    setSelectedArchitectureNode(node);
     setNodeActionsPosition({ x: 20, y: 20 });
   };
 
   const handleActionSelect = (action: string, graphContext: GraphContext) => {
     setChatInitialMessage(action);
     setChatGraphContext(graphContext);
+    setPendingPrompt(action);
+    setPendingGraphContext(graphContext);
     setNodeActionsPosition(null);
     setSelectedNode(null);
     setActiveTab('chat');
@@ -534,6 +585,19 @@ export default function JobDetailPage() {
                           onClose={handleCloseNodeActions}
                         />
                       )}
+                      {selectedArchitectureNode && (
+                        <div className="absolute bottom-4 left-4 bg-background/95 border rounded-lg p-3 shadow-lg">
+                          <p className="text-sm text-muted-foreground mb-2">
+                            Selected: <span className="font-medium text-foreground">{String(selectedArchitectureNode.data?.label || selectedArchitectureNode.id)}</span>
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            <Button size="sm" variant="outline" onClick={() => startGraphContextChat('explain')}>Explain</Button>
+                            <Button size="sm" variant="outline" onClick={() => startGraphContextChat('trace')}>Trace Flow</Button>
+                            <Button size="sm" variant="outline" onClick={() => startGraphContextChat('debug')}>Debug</Button>
+                            <Button size="sm" variant="outline" onClick={() => startGraphContextChat('files')}>Files</Button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : job.markdown_content?.includes('```mermaid') ? (
                     <div ref={mermaidRef} className="flex justify-center overflow-x-auto" />
@@ -542,6 +606,21 @@ export default function JobDetailPage() {
                       No architecture diagram available
                     </div>
                   )}
+
+                  {selectedArchitectureNode && (
+                    <div className="mt-4 rounded-lg border p-4 space-y-3">
+                      <p className="text-sm text-muted-foreground">
+                        Selected node: <span className="font-medium text-foreground">{String(selectedArchitectureNode.data?.label || selectedArchitectureNode.id)}</span>
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <Button size="sm" variant="outline" onClick={() => startGraphContextChat('explain')}>Explain</Button>
+                        <Button size="sm" variant="outline" onClick={() => startGraphContextChat('trace')}>Trace Flow</Button>
+                        <Button size="sm" variant="outline" onClick={() => startGraphContextChat('debug')}>Where to Debug</Button>
+                        <Button size="sm" variant="outline" onClick={() => startGraphContextChat('files')}>Files to Read</Button>
+                      </div>
+                    </div>
+                  )}
+
                 </CardContent>
               </Card>
             </TabsContent>
@@ -569,6 +648,12 @@ export default function JobDetailPage() {
                 isCompleted={job.status === 'completed'}
                 initialMessage={chatInitialMessage}
                 graphContext={chatGraphContext}
+                pendingPrompt={pendingPrompt}
+                pendingGraphContext={pendingGraphContext}
+                onPendingPromptConsumed={() => {
+                  setPendingPrompt('');
+                  setPendingGraphContext(undefined);
+                }}
               />
             </TabsContent>
 
