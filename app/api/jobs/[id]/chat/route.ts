@@ -7,6 +7,23 @@ import type { SandboxInstance } from '@blaxel/core';
 const IDLE_TIMEOUT_MS = 30000; // 30 seconds
 
 const idleTimers: Map<string, NodeJS.Timeout> = new Map();
+const DUPLICATE_WINDOW_MS = 5000;
+
+function normalizeMessageContent(content: string): string {
+  return content.trim().replace(/\s+/g, ' ');
+}
+
+function isRecentDuplicate(
+  previousMessage: { content: string; created_at: string | null },
+  currentContent: string,
+  windowMs = DUPLICATE_WINDOW_MS
+): boolean {
+  const previousTime = previousMessage.created_at ? new Date(previousMessage.created_at).getTime() : NaN;
+  const now = Date.now();
+  if (!Number.isFinite(previousTime) || now - previousTime > windowMs) return false;
+
+  return normalizeMessageContent(previousMessage.content) === normalizeMessageContent(currentContent);
+}
 
 function toChatErrorResponse(error: ChatAgentError) {
   switch (error.code) {
@@ -46,7 +63,7 @@ function clearIdleTimer(jobId: string) {
   }
 }
 
-function setIdleTimer(jobId: string, _sandboxName: string) {
+function setIdleTimer(jobId: string) {
   clearIdleTimer(jobId);
   
   const timer = setTimeout(async () => {
@@ -111,8 +128,9 @@ export async function POST(
     }
 
     const { message, graphContext } = await request.json();
+    const normalizedMessage = typeof message === 'string' ? message.trim() : '';
 
-    if (!message || typeof message !== 'string') {
+    if (!normalizedMessage) {
       return NextResponse.json(
         { error: 'Message is required' },
         { status: 400 }
@@ -196,22 +214,43 @@ export async function POST(
       content: msg.content,
       contextFiles: msg.context_files || [],
     }));
+    while (
+      conversationHistory.length > 0 &&
+      conversationHistory[conversationHistory.length - 1].role === 'user' &&
+      normalizeMessageContent(conversationHistory[conversationHistory.length - 1].content) ===
+        normalizeMessageContent(normalizedMessage)
+    ) {
+      conversationHistory.pop();
+    }
 
     console.log(`[Chat] Loaded ${conversationHistory.length} messages from history`);
 
-    // Save user message with graph context
-    await supabase.from('job_chats').insert({
-      job_id: jobId,
-      role: 'user',
-      content: message,
-      graph_context: graphContext || null,
-    });
+    // Save user message with graph context (idempotent for immediate retries)
+    const { data: latestUserMessage } = await supabase
+      .from('job_chats')
+      .select('content, created_at')
+      .eq('job_id', jobId)
+      .eq('role', 'user')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!latestUserMessage || !isRecentDuplicate(latestUserMessage, normalizedMessage)) {
+      await supabase.from('job_chats').insert({
+        job_id: jobId,
+        role: 'user',
+        content: normalizedMessage,
+        graph_context: graphContext || null,
+      });
+    } else {
+      console.log(`[Chat] Skipped duplicate user message insert for ${jobId}`);
+    }
 
     // Call chat agent
     const result = await chatWithAgent(
       sandbox!,
       jobId,
-      message,
+      normalizedMessage,
       conversationHistory,
       job.markdown_content?.substring(0, 2000),
       graphContext
@@ -220,16 +259,29 @@ export async function POST(
       `[Chat] Agent response complete for ${jobId}. Referenced context files: ${result.contextFiles.length}`
     );
 
-    // Save assistant response
-    await supabase.from('job_chats').insert({
-      job_id: jobId,
-      role: 'assistant',
-      content: result.response,
-      context_files: result.contextFiles,
-    });
+    // Save assistant response (idempotent for immediate retries)
+    const { data: latestAssistantMessage } = await supabase
+      .from('job_chats')
+      .select('content, created_at')
+      .eq('job_id', jobId)
+      .eq('role', 'assistant')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!latestAssistantMessage || !isRecentDuplicate(latestAssistantMessage, result.response)) {
+      await supabase.from('job_chats').insert({
+        job_id: jobId,
+        role: 'assistant',
+        content: result.response,
+        context_files: result.contextFiles,
+      });
+    } else {
+      console.log(`[Chat] Skipped duplicate assistant message insert for ${jobId}`);
+    }
 
     // Set idle timer
-    setIdleTimer(jobId, job.sandbox_name);
+    setIdleTimer(jobId);
 
     return NextResponse.json({
       response: result.response,

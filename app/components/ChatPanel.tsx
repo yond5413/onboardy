@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,6 +25,60 @@ interface ChatPanelProps {
   onPendingPromptConsumed?: () => void;
 }
 
+function normalizeMessageContent(content: string): string {
+  return content.trim().replace(/\s+/g, ' ');
+}
+
+function getGraphContextKey(context?: GraphContext): string {
+  if (!context) return 'no-context';
+
+  return [
+    context.nodeId || '',
+    context.nodeLabel || '',
+    context.nodeType || '',
+    context.filePath || '',
+    context.action || '',
+    (context.relatedEdges || []).join('|'),
+    (context.neighborNodes || []).join('|'),
+    (context.relationshipDetails || []).join('|'),
+  ].join('::');
+}
+
+function dedupeChatMessages(chatMessages: ChatMessage[]): ChatMessage[] {
+  const deduped: ChatMessage[] = [];
+
+  for (const message of chatMessages) {
+    const previousMessage = deduped[deduped.length - 1];
+    if (!previousMessage) {
+      deduped.push(message);
+      continue;
+    }
+
+    const sameRole = previousMessage.role === message.role;
+    const sameContent =
+      normalizeMessageContent(previousMessage.content) === normalizeMessageContent(message.content);
+    const timeDiffMs = Math.abs(
+      new Date(message.created_at).getTime() - new Date(previousMessage.created_at).getTime()
+    );
+    const isNearDuplicate = sameRole && sameContent && Number.isFinite(timeDiffMs) && timeDiffMs <= 5000;
+
+    if (!isNearDuplicate) {
+      deduped.push(message);
+      continue;
+    }
+
+    const mergedContextFiles = Array.from(
+      new Set([...(previousMessage.context_files || []), ...(message.context_files || [])])
+    );
+    deduped[deduped.length - 1] = {
+      ...previousMessage,
+      context_files: mergedContextFiles.length > 0 ? mergedContextFiles : undefined,
+    };
+  }
+
+  return deduped;
+}
+
 export function ChatPanel({
   jobId,
   isCompleted,
@@ -41,58 +95,29 @@ export function ChatPanel({
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [activeGraphContext, setActiveGraphContext] = useState<GraphContext | undefined>(graphContext);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const sendingRef = useRef(false);
+  const handledPendingKeyRef = useRef<string | null>(null);
 
-  // Update input and context when props change
-  useEffect(() => {
-    if (initialMessage && initialMessage !== input) {
-      setInput(initialMessage);
-    }
-  }, [initialMessage]);
-
-  useEffect(() => {
-    if (graphContext) {
-      setActiveGraphContext(graphContext);
-    }
-  }, [graphContext]);
-
-  useEffect(() => {
-    if (isCompleted && jobId) {
-      loadChatHistory();
-    }
-  }, [jobId, isCompleted]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  useEffect(() => {
-    if (!pendingPrompt || !isCompleted || isLoading) return;
-
-    setInput(pendingPrompt);
-    sendChatMessage(pendingPrompt, pendingGraphContext).finally(() => {
-      onPendingPromptConsumed?.();
-    });
-  }, [pendingPrompt]);
-
-  const loadChatHistory = async () => {
+  const loadChatHistory = useCallback(async () => {
     try {
       setIsLoadingHistory(true);
       const response = await fetch(`/api/jobs/${jobId}/chat`);
       if (!response.ok) throw new Error('Failed to load chat history');
 
       const data = await response.json();
-      setMessages(data.messages || []);
+      setMessages(dedupeChatMessages(data.messages || []));
     } catch (err) {
       console.error('Failed to load chat history:', err);
     } finally {
       setIsLoadingHistory(false);
     }
-  };
+  }, [jobId]);
 
-  const sendChatMessage = async (message: string, graphContext?: GraphContext) => {
+  const sendChatMessage = useCallback(async (message: string, graphContext?: GraphContext) => {
     const normalizedMessage = message.trim();
-    if (!normalizedMessage || isLoading) return;
+    if (!normalizedMessage || sendingRef.current) return;
 
+    sendingRef.current = true;
     setInput('');
     setIsLoading(true);
     setError(null);
@@ -132,10 +157,54 @@ export function ChatPanel({
       // Remove temp message on error
       setMessages(prev => prev.filter(m => m.id !== tempId));
     } finally {
+      sendingRef.current = false;
       setIsLoading(false);
       setActiveGraphContext(undefined);
     }
-  };
+  }, [activeGraphContext, jobId, loadChatHistory]);
+
+  // Update input and context when props change
+  useEffect(() => {
+    if (!initialMessage) return;
+    setInput((previousInput) => (initialMessage !== previousInput ? initialMessage : previousInput));
+  }, [initialMessage]);
+
+  useEffect(() => {
+    if (graphContext) {
+      setActiveGraphContext(graphContext);
+    }
+  }, [graphContext]);
+
+  useEffect(() => {
+    if (isCompleted && jobId) {
+      loadChatHistory();
+    }
+  }, [isCompleted, jobId, loadChatHistory]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  useEffect(() => {
+    if (!pendingPrompt || !isCompleted || sendingRef.current) return;
+
+    const pendingKey = `${normalizeMessageContent(pendingPrompt)}::${getGraphContextKey(
+      pendingGraphContext
+    )}`;
+    if (handledPendingKeyRef.current === pendingKey) return;
+    handledPendingKeyRef.current = pendingKey;
+
+    setInput(pendingPrompt);
+    sendChatMessage(pendingPrompt, pendingGraphContext).finally(() => {
+      onPendingPromptConsumed?.();
+    });
+  }, [isCompleted, onPendingPromptConsumed, pendingGraphContext, pendingPrompt, sendChatMessage]);
+
+  useEffect(() => {
+    if (!pendingPrompt) {
+      handledPendingKeyRef.current = null;
+    }
+  }, [pendingPrompt]);
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault();

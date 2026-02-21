@@ -170,30 +170,47 @@ Your expertise includes:
 
 The repository is already available at /repo. Focus on analyzing the existing files.`;
 
-const ANALYSIS_PROMPT = `Analyze the repository at /repo and generate a system design document for onboarding new developers.
+const ANALYSIS_PROMPT = `Analyze the repository at /repo and generate a comprehensive system design document with depth for multiple audiences.
 
-## Task
+## Exploration Strategy (Cost-Optimized)
 
-1. Explore the repository structure at /repo
-2. Read key configuration files (package.json, tsconfig.json, requirements.txt, etc.)
-3. Examine important source files to understand the implementation
-4. Generate a system design document suitable for a new developer joining the team
+Use these efficient patterns to explore the codebase:
+1. **Glob patterns**: Find all config files: package.json, tsconfig.json, requirements.txt, Cargo.toml, go.mod, Dockerfile, .env* files
+2. **Grep patterns**: Search for key indicators:
+   - API routes: \`router\`, \`route\`, \`@app.route\`, \`@post\`, \`@get\`, \`express.Router\`
+   - Data models: \`interface\`, \`type\`, \`class\`, \`model\`, \`schema\`, \`type.*=\`
+   - Authentication: \`auth\`, \`middleware\`, \`jwt\`, \`session\`, \`passport\`
+   - Error handling: \`catch\`, \`error\`, \`exception\`, \`try\`
+   - External APIs: \`http\`, \`axios\`, \`fetch\`, \`client\`, \`sdk\`
+3. **Read strategically**: Entry points first (index, main, app files), then config files, then 3-5 key domain files
 
 ## Output Format
 
-Create a concise markdown document focused on helping a new engineer understand the system within their first week.
+Create a LAYERED markdown document that serves multiple audiences. Output ONLY markdown with sections clearly marked for each layer.
 
-Output ONLY markdown with these sections:
+---
 
-### 1. Overview
-2-3 sentences describing what the system does and its primary purpose.
+## LAYER 1: EXECUTIVE SUMMARY (For non-technical stakeholders - ~2 min read)
 
-### 2. Tech Stack
-Bullet list of technologies used (languages, frameworks, databases, key libraries).
+### What This System Does
+2-3 sentences explaining the core value: what problem it solves, primary use case.
 
-### 3. Architecture
-Brief description of the high-level architecture pattern.
-Include a Mermaid diagram:
+### Key Features
+- Feature 1: Brief explanation
+- Feature 2: Brief explanation
+- Feature 3: Brief explanation
+
+---
+
+## LAYER 2: DEVELOPER ONBOARDING (For newbie developers - ~10 min read)
+
+### Tech Stack
+Bullet list of main technologies (languages, frameworks, databases, key libraries with versions if available).
+
+### Architecture Overview
+Brief description of the high-level architecture pattern (e.g., Client-Server, Microservices, Monolith, Serverless, MVC).
+
+Include a Mermaid diagram showing system boundaries:
 \`\`\`mermaid
 graph TD
     A[Client] --> B[API/Entry]
@@ -201,68 +218,164 @@ graph TD
     C --> D[Database/Services]
 \`\`\`
 
-### 4. Key Components
-CRITICAL: MUST use proper markdown table format with pipes and dashes.
+### Project Structure
+Quick tour of the repository layout:
+- /repo/src - What's here
+- /repo/app - What's here
+- /repo/api - What's here
+(etc. for main directories)
 
-Format:
-| Name | Purpose | Key Files |
-|------|---------|-----------|
-| ComponentName | Brief one-line description | /repo/path/to/file.ts |
-| AnotherComponent | What it does | /repo/path/to/another.ts |
-
-Requirements:
-- Exactly 3 columns: Name, Purpose, Key Files
-- Use proper markdown table syntax with | separators
-- Include header separator line with dashes
-- 8-12 components maximum
-- Key Files column must contain specific paths starting with /repo/
-- Each row on its own line
-
-### 5. Data Flow
-Numbered steps (1, 2, 3...) showing how a request moves through the system.
-Each step should be one sentence explaining what happens.
-
-### 6. Key Design Decisions
-List exactly 3 important architectural decisions.
-
-Format:
-1. **Decision Name**: Brief explanation of why this choice was made and its impact.
-2. **Decision Name**: Brief explanation...
-3. **Decision Name**: Brief explanation...
-
-### 7. Getting Started
+### Getting Started
 
 #### Prerequisites
-List any required software, versions, or accounts needed.
+- Required software/versions
+- Required environment variables
+- Accounts or API keys needed
 
 #### Installation
-Step-by-step commands to set up the project locally.
+Step-by-step commands:
+\`\`\`bash
+git clone ...
+cd repo
+npm install
+npm run dev
+\`\`\`
 
 #### Key Files to Read First
-Ordered list of the most important files a new developer should read:
-1. /repo/path/to/file.ts - Why it's important
-2. /repo/path/to/another.ts - Why it's important
-3. etc.
+Ordered list (read in this order):
+1. /repo/path/to/file.ts - Why: Entry point, explains overall flow
+2. /repo/path/to/config.ts - Why: Configuration and setup
+3. /repo/path/to/models.ts - Why: Core data structures
+4. /repo/path/to/api.ts - Why: Main API endpoints
+5. /repo/path/to/service.ts - Why: Business logic
+(Minimum 5, maximum 10)
+
+---
+
+## LAYER 3: TECHNICAL DEEP DIVE (For experienced developers - ~20 min read)
+
+### Key Components
+CRITICAL: MUST use proper markdown table format with pipes and dashes.
+
+List ALL significant components (not limited to 8-12).
+
+Format:
+| Name | Purpose | Responsibilities | Key Files |
+|------|---------|------------------|-----------|
+| ComponentName | What it does | 1. Task, 2. Task, 3. Task | /repo/path/to/file.ts |
+| AnotherComponent | Brief description | 1. Task, 2. Task | /repo/path/to/another.ts |
+
+Requirements:
+- Exactly 4 columns: Name, Purpose, Responsibilities, Key Files
+- Use proper markdown table syntax with | separators
+- Include header separator line with dashes
+- Key Files column must contain specific paths starting with /repo/
+- Each row on its own line
+- Be complete: include all major components (services, handlers, models, utilities)
+
+### API Endpoints (if applicable)
+For each significant route/endpoint:
+\`\`\`
+POST /api/users
+- Purpose: Create a new user
+- Request: { name, email, password }
+- Response: { id, name, email, createdAt }
+- Handler: /repo/app/api/users/route.ts
+\`\`\`
+
+### Data Models & Schemas
+TypeScript interfaces or database schemas for key data structures:
+\`\`\`
+User {
+  id: string
+  email: string
+  name: string
+  createdAt: Date
+}
+\`\`\`
+
+### Authentication & Security
+- How are users authenticated? (JWT, OAuth, Sessions, etc.)
+- Where is auth enforced? (Middleware, Guards, etc.)
+- Key security patterns used
+
+### Error Handling & Logging
+- How are errors handled? (Try-catch, Error boundaries, etc.)
+- What's logged? Where? (Console, Files, External services?)
+- Key error codes or patterns
+
+### Environment Configuration
+Key environment variables and what they control:
+- DATABASE_URL: Connection to database
+- API_KEY: External service authentication
+- etc.
+
+### External Integrations
+Third-party services used:
+- Service Name (API endpoint, what it's used for)
+- Another Service (purpose, authentication method)
+
+### Data Flow
+Detailed steps (numbered 1, 2, 3...) showing how a typical request flows through the system:
+1. User initiates action via UI
+2. Frontend makes HTTP request to /api/endpoint
+3. API handler validates request
+4. Service layer processes business logic
+5. Database query executed
+6. Response formatted and returned
+(Minimum 8 steps, be specific with actual flow)
+
+### Key Design Decisions
+Explain 2-3 important architectural choices:
+
+1. **Decision Name**: 
+   - What was decided
+   - Why this choice was made
+   - Trade-offs considered
+   - Impact on the system
+
+2. **Decision Name**: (same format)
+
+3. **Decision Name**: (same format)
+
+### Testing Strategy
+- What's tested? (Unit, Integration, E2E)
+- Test locations: /repo/path/to/tests
+- How to run tests: \`npm run test\`
+
+---
 
 ## Rules
 - No conversational filler (no "Perfect!", "I've created", etc.)
 - No emojis
 - No introductory summaries before sections
-- Be concise and scannable
-- Use tables where appropriate (especially Key Components)
+- Be specific and scannable
+- Use tables and code blocks for clarity
 - Use specific file paths (all starting with /repo/)
 - DO NOT attempt to clone or download anything - work only with existing /repo contents
 - Output ONLY markdown - no JSON code blocks
-- ENSURE all markdown tables use proper syntax with | separators and header rows`;
+- ENSURE all markdown tables use proper syntax with | separators and header rows
+- Layers should be clearly visible by their markdown structure`;
 
 
-const DIAGRAM_PROMPT = `Analyze the repository at /repo and generate ONLY a JSON structure for React Flow diagrams.
 
-## Task
+const DIAGRAM_PROMPT = `Analyze the repository at /repo and generate comprehensive React Flow diagram data for both architecture and data flow visualization.
 
-1. Explore the repository structure at /repo to understand the architecture
-2. Identify key components, services, databases, and external integrations
-3. Understand the data flow through the system
+## Exploration Strategy
+
+1. Identify all components by exploring:
+   - Entry points (main.ts, index.ts, app.tsx, server.js)
+   - Configuration (package.json, tsconfig.json)
+   - Directory structure (grep -r 'export' to find modules)
+   - API routes (find all /api, /routes directories)
+   - Data models (find interfaces, types, schemas)
+   - External services (grep 'http', 'client', 'sdk')
+
+2. Map relationships by understanding:
+   - What calls what (imports, function calls)
+   - Data dependencies (what reads/writes to what)
+   - External integrations (third-party APIs)
+   - Authentication flows
 
 ## Output Format
 
@@ -271,25 +384,49 @@ Generate ONLY a JSON code block with this exact structure - no markdown text:
 \`\`\`json
 {
   "patterns": {
-    "framework": "The main framework used (e.g., Next.js, Express, Django)",
-    "architecture": "The architecture pattern (e.g., Client-Server, Microservices, Monolith, Serverless)",
-    "keyModules": ["List of key modules or directories with significance"]
+    "framework": "The main framework used (e.g., Next.js, Express, Django, Flask, etc.)",
+    "architecture": "The architecture pattern (e.g., Client-Server, Microservices, Monolith, Serverless, MVC, etc.)",
+    "keyModules": ["List of 5-8 key modules or directories with actual significance from the codebase"]
   },
   "reactFlowData": {
     "architecture": {
       "nodes": [
-        { "id": "unique-id", "type": "service|database|client|external|gateway", "position": { "x": 0, "y": 0 }, "data": { "label": "Name", "description": "What this component does" } }
+        { "id": "client-ui", "type": "client", "position": { "x": 0, "y": 100 }, "data": { "label": "Frontend UI", "description": "React/Vue/Angular components, user interface" } },
+        { "id": "api-gateway", "type": "gateway", "position": { "x": 200, "y": 100 }, "data": { "label": "API Layer", "description": "Express/FastAPI/Django routes, request handling" } },
+        { "id": "service-auth", "type": "service", "position": { "x": 400, "y": 50 }, "data": { "label": "Auth Service", "description": "JWT validation, user authentication" } },
+        { "id": "service-core", "type": "service", "position": { "x": 400, "y": 100 }, "data": { "label": "Business Logic", "description": "Core application services" } },
+        { "id": "database", "type": "database", "position": { "x": 600, "y": 100 }, "data": { "label": "Database", "description": "PostgreSQL/MongoDB/MySQL" } },
+        { "id": "cache", "type": "database", "position": { "x": 600, "y": 50 }, "data": { "label": "Cache", "description": "Redis/Memcached" } },
+        { "id": "external-api", "type": "external", "position": { "x": 600, "y": 150 }, "data": { "label": "External API", "description": "Third-party service integration" } }
       ],
       "edges": [
-        { "id": "edge-id", "source": "source-id", "target": "target-id", "label": "optional label" }
+        { "id": "e1", "source": "client-ui", "target": "api-gateway", "label": "HTTP/REST" },
+        { "id": "e2", "source": "api-gateway", "target": "service-auth", "label": "Validate token" },
+        { "id": "e3", "source": "api-gateway", "target": "service-core", "label": "Route request" },
+        { "id": "e4", "source": "service-core", "target": "database", "label": "Query/Update" },
+        { "id": "e5", "source": "service-core", "target": "cache", "label": "Get/Set cache" },
+        { "id": "e6", "source": "service-core", "target": "external-api", "label": "HTTP call" }
       ]
     },
     "dataFlow": {
       "nodes": [
-        { "id": "flow-id", "type": "input|default|output", "position": { "x": 0, "y": 0 }, "data": { "label": "Step name", "description": "What happens here" } }
+        { "id": "user-action", "type": "input", "position": { "x": 0, "y": 100 }, "data": { "label": "User Action", "description": "User initiates request" } },
+        { "id": "http-request", "type": "default", "position": { "x": 150, "y": 100 }, "data": { "label": "HTTP Request", "description": "Frontend sends request to API" } },
+        { "id": "validation", "type": "default", "position": { "x": 300, "y": 100 }, "data": { "label": "Validate Request", "description": "Check auth, validate input" } },
+        { "id": "process", "type": "default", "position": { "x": 450, "y": 100 }, "data": { "label": "Process", "description": "Execute business logic" } },
+        { "id": "db-query", "type": "default", "position": { "x": 600, "y": 100 }, "data": { "label": "Database", "description": "Fetch/store data" } },
+        { "id": "transform", "type": "default", "position": { "x": 750, "y": 100 }, "data": { "label": "Transform", "description": "Format response data" } },
+        { "id": "http-response", "type": "default", "position": { "x": 900, "y": 100 }, "data": { "label": "HTTP Response", "description": "Send response to client" } },
+        { "id": "render", "type": "output", "position": { "x": 1050, "y": 100 }, "data": { "label": "Render UI", "description": "Update frontend display" } }
       ],
       "edges": [
-        { "id": "flow-edge", "source": "from-id", "target": "to-id", "label": "data being passed", "animated": true }
+        { "id": "d1", "source": "user-action", "target": "http-request", "label": "Click/Submit", "animated": true },
+        { "id": "d2", "source": "http-request", "target": "validation", "label": "POST /api/endpoint", "animated": true },
+        { "id": "d3", "source": "validation", "target": "process", "label": "Request valid", "animated": true },
+        { "id": "d4", "source": "process", "target": "db-query", "label": "Query needed", "animated": true },
+        { "id": "d5", "source": "db-query", "target": "transform", "label": "Data rows", "animated": true },
+        { "id": "d6", "source": "transform", "target": "http-response", "label": "JSON payload", "animated": true },
+        { "id": "d7", "source": "http-response", "target": "render", "label": "JSON response", "animated": true }
       ]
     }
   }
@@ -297,41 +434,41 @@ Generate ONLY a JSON code block with this exact structure - no markdown text:
 \`\`\`
 
 ## Guidelines for Node Types
-- "client": Frontend/user-facing components (use purple color)
-- "service": Backend services, processors, handlers (use blue color)
-- "database": Data stores - SQL, NoSQL, file storage (use green color)
-- "external": Third-party APIs, external services (use orange color)
-- "gateway": API gateways, load balancers (use red color)
+- "client": Frontend/user-facing components (React components, Vue, Angular, mobile apps)
+- "service": Backend services, processors, handlers, middleware, business logic
+- "database": Data stores - SQL, NoSQL, file storage, caches
+- "external": Third-party APIs, payment processors, cloud services, message queues
+- "gateway": API gateways, load balancers, routers, middleware layers
+- "input": Data entry points in flow diagrams
+- "output": Data exit points in flow diagrams
 
-## Guidelines for Aesthetics (Important for New Developers)
-The diagrams should be aesthetically pleasing and easy to understand for a new developer joining the team.
+## Architecture Diagram Guidelines
+- Show COMPLETE system boundaries
+- Include all major components (frontend, API layer, services, databases, external integrations)
+- Position left-to-right: inputs (left) → processing (center) → storage/external (right)
+- Group related components vertically
+- Use consistent spacing: 150-200px horizontal, 80-120px vertical
+- Maximum 15 nodes (capture all significant components)
+- Edge labels should describe the communication (HTTP, Query, Event, etc.)
 
-### Architecture Diagram (12-15 nodes max)
-- Use consistent horizontal spacing: 150-200px between nodes
-- Use consistent vertical spacing: 80-120px between nodes
-- Arrange nodes in left-to-right flow: inputs → processing → outputs
-- Group related components vertically (e.g., all services together, all databases together)
-- Position: start from left (client/frontend) → middle (services) → right (data stores/external)
-- Keep the diagram compact and scannable
+## Data Flow Diagram Guidelines
+- Show complete request lifecycle from user action to response
+- Minimum 7-8 steps: User Action → Request → Validation → Processing → Data Access → Transform → Response → Render
+- Each node represents a meaningful step
+- All edges animated to show data movement direction
+- Edge labels describe data being passed (request, validated data, query results, response, etc.)
+- Maximum 10 nodes (keep flow traceable)
 
-### Data Flow Diagram (8-10 nodes max)
-- Show sequential steps from left to right
-- Each node should clearly represent a step in processing
-- Use animated edges to show direction of data flow
+## Rules
+- Output ONLY the JSON - no explanatory text before or after
+- BE THOROUGH: Capture the actual system you find, not a generic example
+- Include ALL significant components (don't leave out important pieces)
+- Use realistic, specific node names based on actual code structure
+- Edge labels should reflect actual communication protocols/methods in the codebase
+- Descriptions should be actionable (readable by non-technical stakeholders too)
+- Make sure data flow traces a real user request path
+- Position nodes clearly - diagrams should tell a story at a glance`;
 
-### General Guidelines
-- Edge labels should be short and clear
-- Use consistent naming conventions for node IDs
-- Include a legend or use clear node types that explain themselves
-- Make it visually balanced - not too crowded, not too sparse
-
-## Guidelines
-- Output ONLY the JSON - no explanatory text
-- Include maximum 15 nodes for architecture diagram
-- Include maximum 10 nodes for data flow diagram
-- Position nodes logically (left to right flow)
-- Use meaningful IDs that describe the component
-- Edge labels should describe the relationship`;
 
 const HAIKU_MODEL = 'claude-haiku-4-5';
 

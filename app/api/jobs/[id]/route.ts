@@ -77,6 +77,8 @@ export async function GET(
       github_url: job.github_url,
       status: job.status,
       markdown_content: job.markdown_content,
+      markdown_executive_summary: job.markdown_executive_summary,
+      markdown_technical_deep_dive: job.markdown_technical_deep_dive,
       script_content: job.script_content,
       audio_file_path: job.audio_file_path,
       error: job.error_message,

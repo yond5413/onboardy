@@ -31,9 +31,10 @@ const STAGES: Stage[] = [
 interface AgentLogStreamProps {
   jobId: string;
   isActive: boolean;
+  onComplete?: () => void;
 }
 
-export function AgentLogStream({ jobId, isActive }: AgentLogStreamProps) {
+export function AgentLogStream({ jobId, isActive, onComplete }: AgentLogStreamProps) {
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [isOpen, setIsOpen] = useState(true);
   const [isConnected, setIsConnected] = useState(false);
@@ -58,6 +59,12 @@ export function AgentLogStream({ jobId, isActive }: AgentLogStreamProps) {
         
         if (data.stage) {
           updateStageProgress(data.stage, data.type);
+        }
+
+        if (data.type === 'complete') {
+          onComplete?.();
+          eventSource.close();
+          setIsConnected(false);
         }
       } catch (e) {
         console.error('Failed to parse log event:', e);

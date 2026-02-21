@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -59,6 +59,8 @@ interface JobData {
   github_url: string;
   status: string;
   markdown_content?: string;
+  markdown_executive_summary?: string;
+  markdown_technical_deep_dive?: string;
   script_content?: string;
   audio_file_path?: string;
   podcast_settings?: PodcastSettings;
@@ -90,7 +92,7 @@ export default function JobDetailPage() {
   const [job, setJob] = useState<JobData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [activeTab, setActiveTab] = useState('design');
+  const [activeTab, setActiveTab] = useState('overview');
   const [generatingPodcast, setGeneratingPodcast] = useState(false);
   const [podcastStyle, setPodcastStyle] = useState<PodcastStyle>('overview');
   const [selectedNode, setSelectedNode] = useState<Node<DiagramNodeData> | null>(null);
@@ -114,14 +116,22 @@ export default function JobDetailPage() {
     });
   }, []);
 
-  // Fetch job data
+  // Fetch job data - also used by AgentLogStream onComplete
+  const fetchJob = useCallback(async () => {
+    const response = await fetch(`/api/jobs/${jobId}`);
+    if (response.ok) {
+      const data = await response.json();
+      setJob(data);
+    }
+  }, [jobId]);
+
+  // Fetch + poll - original pattern restored
+  // dep on job?.status causes effect to re-run when status changes, which is what transitions the UI
   useEffect(() => {
-    async function fetchJob() {
+    async function loadJob() {
       try {
         const response = await fetch(`/api/jobs/${jobId}`);
-        if (!response.ok) {
-          throw new Error('Failed to fetch job');
-        }
+        if (!response.ok) throw new Error('Failed to fetch job');
         const data = await response.json();
         setJob(data);
         setLoading(false);
@@ -131,9 +141,9 @@ export default function JobDetailPage() {
       }
     }
 
-    fetchJob();
+    loadJob();
 
-    // Poll for updates if job is pending
+    // Poll while job is active
     const interval = setInterval(async () => {
       if (job && ['queued', 'processing', 'analyzing'].includes(job.status)) {
         const response = await fetch(`/api/jobs/${jobId}`);
@@ -466,7 +476,30 @@ export default function JobDetailPage() {
 
       {/* Real-time Agent Logs */}
       {['queued', 'processing', 'analyzing'].includes(job.status) && (
-        <AgentLogStream jobId={jobId} isActive={['queued', 'processing', 'analyzing'].includes(job.status)} />
+        <AgentLogStream 
+          jobId={jobId} 
+          isActive={['queued', 'processing', 'analyzing'].includes(job.status)}
+          onComplete={async () => {
+            // Wait a moment for DB write to commit
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Force immediate refetch with cache bust
+            try {
+              const response = await fetch(`/api/jobs/${jobId}?_t=${Date.now()}`, { 
+                cache: 'no-store',
+                headers: { 'Cache-Control': 'no-cache' }
+              });
+              if (response.ok) {
+                const data = await response.json();
+                setJob(data);
+              }
+            } catch (error) {
+              console.error('Failed to refetch job on completion:', error);
+              // Fallback to existing fetchJob
+              await fetchJob();
+            }
+          }}
+        />
       )}
 
       {/* Error State */}
@@ -536,10 +569,18 @@ export default function JobDetailPage() {
 
           {/* Tabs */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-6">
+            <TabsList className="grid w-full grid-cols-8">
+              <TabsTrigger value="overview">
+                <Info className="mr-2 h-4 w-4" />
+                Overview
+              </TabsTrigger>
+              <TabsTrigger value="onboarding">
+                <User className="mr-2 h-4 w-4" />
+                Getting Started
+              </TabsTrigger>
               <TabsTrigger value="design">
                 <FileText className="mr-2 h-4 w-4" />
-                Design
+                Technical
               </TabsTrigger>
               <TabsTrigger value="architecture">
                 <Layers className="mr-2 h-4 w-4" />
@@ -563,17 +604,53 @@ export default function JobDetailPage() {
               </TabsTrigger>
             </TabsList>
 
+            <TabsContent value="overview" className="mt-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Executive Summary</CardTitle>
+                  <p className="text-sm text-muted-foreground mt-2">
+                    High-level overview for non-technical stakeholders
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  {job.markdown_executive_summary ? (
+                    <MarkdownRenderer content={job.markdown_executive_summary} />
+                  ) : (
+                    <p className="text-muted-foreground">Executive summary not available. The analysis may not have generated layered output.</p>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="onboarding" className="mt-6">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Developer Onboarding</CardTitle>
+                  <p className="text-sm text-muted-foreground mt-2">
+                    Get started with this project - includes setup, key files, and architecture basics
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <MarkdownRenderer content={job.markdown_content} />
+                </CardContent>
+              </Card>
+            </TabsContent>
+
             <TabsContent value="design" className="mt-6">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
-                  <CardTitle>System Design Document</CardTitle>
+                  <CardTitle>Technical Deep Dive</CardTitle>
                   <Button variant="outline" size="sm" onClick={handleDownloadMarkdown}>
                     <Download className="mr-2 h-4 w-4" />
                     Download
                   </Button>
                 </CardHeader>
                 <CardContent>
-                  <MarkdownRenderer content={job.markdown_content} />
+                  {job.markdown_technical_deep_dive ? (
+                    <MarkdownRenderer content={job.markdown_technical_deep_dive} />
+                  ) : (
+                    <MarkdownRenderer content={job.markdown_content} />
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>

@@ -8,6 +8,7 @@ import { generateTTS } from '@/app/lib/elevenlabs';
 import { generatePodcastScript, type PodcastStyle } from '@/app/lib/script';
 import { exportAnalysisOutputs, type ExportPaths } from '@/app/lib/storage/export';
 import { emitJobEvent } from '@/app/lib/job-events';
+import { extractLayeredMarkdown } from '@/app/lib/markdown-extractor';
 import type { AnalysisJob, AnalysisContext, ReactFlowData } from '@/app/lib/types';
 
 function generateId(): string {
@@ -186,6 +187,14 @@ async function processJob(
 
     console.log(`[${jobId}] Analysis complete, markdown: ${markdown.length} chars`);
 
+    // Extract layered markdown for different audiences
+    const layeredMarkdown = extractLayeredMarkdown(markdown);
+    console.log(`[${jobId}] Extracted layers:`, {
+      full: markdown.length,
+      executiveSummary: layeredMarkdown.executiveSummary.length,
+      technicalDeepDive: layeredMarkdown.technicalDeepDive.length,
+    });
+
     // Step 2: Generate React Flow diagram data
     let diagramResult: DiagramResult | undefined;
     let reactFlowData: ReactFlowData | undefined;
@@ -231,6 +240,8 @@ async function processJob(
     await supabase.from('jobs').update({
       status: 'completed',
       markdown_content: markdown,
+      markdown_executive_summary: layeredMarkdown.executiveSummary || undefined,
+      markdown_technical_deep_dive: layeredMarkdown.technicalDeepDive || undefined,
       analysis_metrics: analysisMetrics || undefined,
       analysis_context: analysisContext,
       react_flow_data: reactFlowData,

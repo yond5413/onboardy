@@ -10,8 +10,16 @@ export interface JobEvent {
 
 const MAX_BUFFER_SIZE = 100;
 
-const eventBuffers: Map<string, JobEvent[]> = new Map();
-const listeners: Map<string, Set<(event: JobEvent) => void>> = new Map();
+// Use globalThis to ensure all Next.js route instances share the same Maps
+declare global {
+  var __jobEventBuffers: Map<string, JobEvent[]> | undefined;
+  var __jobEventListeners: Map<string, Set<(event: JobEvent) => void>> | undefined;
+}
+
+const eventBuffers: Map<string, JobEvent[]> =
+  globalThis.__jobEventBuffers ?? (globalThis.__jobEventBuffers = new Map());
+const listeners: Map<string, Set<(event: JobEvent) => void>> =
+  globalThis.__jobEventListeners ?? (globalThis.__jobEventListeners = new Map());
 
 function generateEventId(): string {
   return Math.random().toString(36).substring(2, 15);
