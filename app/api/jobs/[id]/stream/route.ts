@@ -43,12 +43,41 @@ export async function GET(
     
     const stream = new ReadableStream({
       start(controller) {
+        let streamClosed = false;
+
         const sendEvent = (event: JobEvent) => {
+          if (streamClosed) return;
+
           const data = `data: ${JSON.stringify(event)}\n\n`;
           try {
             controller.enqueue(encoder.encode(data));
+
+            // Close stream immediately when job completes or errors
+            if (event.type === 'complete' || event.type === 'error') {
+              streamClosed = true;
+              clearInterval(keepAlive);
+              unsubscribe();
+              // Small delay to ensure event flushes before closing
+              setTimeout(() => {
+                try {
+                  controller.close();
+                } catch (e) {
+                  console.error('Error closing stream:', e);
+                }
+              }, 50);
+            }
           } catch (error) {
             console.error('Error sending event:', error);
+            if (!streamClosed) {
+              streamClosed = true;
+              clearInterval(keepAlive);
+              unsubscribe();
+              try {
+                controller.close();
+              } catch (e) {
+                console.error('Error closing stream after error:', e);
+              }
+            }
           }
         };
 

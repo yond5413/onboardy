@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/app/lib/supabase/server';
 import { jobStore } from '@/app/lib/jobs';
-import { generatePodcastScript, type PodcastStyle } from '@/app/lib/script';
+import { generatePodcastScript, type PodcastContentStyle, type PodcastSettings } from '@/app/lib/script';
 import { generateTTS } from '@/app/lib/elevenlabs';
 
 function getRepoName(githubUrl: string): string {
@@ -56,11 +56,17 @@ export async function POST(
       );
     }
 
-    const { podcastStyle } = await request.json();
-    const style = (podcastStyle as PodcastStyle) || job.podcast_style || 'overview';
+    const { podcastStyle, ...restSettings } = await request.json();
+    const settings: PodcastSettings = {
+      style: (podcastStyle as PodcastContentStyle) || job.podcast_style?.style || 'overview',
+      duration: restSettings.duration || job.podcast_style?.duration || 'standard',
+      tone: restSettings.tone || job.podcast_style?.tone || 'professional',
+      audience: restSettings.audience || job.podcast_style?.audience || 'developer',
+    };
+    const style = settings.style;
     const repoName = getRepoName(job.github_url);
 
-    console.log(`[${jobId}] Generating podcast with style: ${style}`);
+    console.log(`[${jobId}] Generating podcast with settings:`, settings);
 
     // Update status
     await supabase.from('jobs').update({ status: 'generating_podcast' }).eq('id', jobId);
@@ -69,7 +75,7 @@ export async function POST(
     try {
       // Generate podcast script
       console.log(`[${jobId}] Generating podcast script...`);
-      const script = await generatePodcastScript(job.markdown_content, style, repoName);
+      const script = await generatePodcastScript(job.markdown_content, style, repoName, settings);
       
       if (!script) {
         throw new Error('Failed to generate podcast script');
@@ -113,7 +119,7 @@ export async function POST(
       // Revert to completed status without podcast
       await supabase.from('jobs').update({
         status: 'completed',
-        error: error instanceof Error ? error.message : 'Podcast generation failed',
+        error_message: error instanceof Error ? error.message : 'Podcast generation failed',
       }).eq('id', jobId);
 
       jobStore.update(jobId, { 

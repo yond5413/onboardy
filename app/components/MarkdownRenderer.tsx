@@ -6,12 +6,15 @@ import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { MermaidDiagram } from '@/app/components/MermaidDiagram';
 
 interface MarkdownRendererProps {
   content: string;
+  /** When true, ```mermaid code blocks are rendered as diagrams instead of syntax-highlighted text */
+  renderMermaid?: boolean;
 }
 
-export function MarkdownRenderer({ content }: MarkdownRendererProps) {
+export function MarkdownRenderer({ content, renderMermaid = false }: MarkdownRendererProps) {
   return (
     <div className="markdown-body prose dark:prose-invert max-w-none">
       <ReactMarkdown
@@ -22,6 +25,11 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
           code({ node, inline, className, children, ...props }: any) {
             const match = /language-(\w+)/.exec(className || '');
             const language = match ? match[1] : '';
+            
+            // Render mermaid code blocks as diagrams when enabled
+            if (!inline && language === 'mermaid' && renderMermaid) {
+              return <MermaidDiagram chart={String(children)} />;
+            }
             
             if (!inline && language) {
               return (

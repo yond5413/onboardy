@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Loader2, Send, User, Bot, AlertCircle } from 'lucide-react';
+import type { GraphContext } from '@/app/lib/types';
 
 interface ChatMessage {
   id: string;
@@ -17,47 +18,106 @@ interface ChatMessage {
 interface ChatPanelProps {
   jobId: string;
   isCompleted: boolean;
+  initialMessage?: string;
+  graphContext?: GraphContext;
+  pendingPrompt?: string;
+  pendingGraphContext?: GraphContext;
+  onPendingPromptConsumed?: () => void;
 }
 
-export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
+function normalizeMessageContent(content: string): string {
+  return content.trim().replace(/\s+/g, ' ');
+}
+
+function getGraphContextKey(context?: GraphContext): string {
+  if (!context) return 'no-context';
+
+  return [
+    context.nodeId || '',
+    context.nodeLabel || '',
+    context.nodeType || '',
+    context.filePath || '',
+    context.action || '',
+    (context.relatedEdges || []).join('|'),
+    (context.neighborNodes || []).join('|'),
+    (context.relationshipDetails || []).join('|'),
+  ].join('::');
+}
+
+function dedupeChatMessages(chatMessages: ChatMessage[]): ChatMessage[] {
+  const deduped: ChatMessage[] = [];
+
+  for (const message of chatMessages) {
+    const previousMessage = deduped[deduped.length - 1];
+    if (!previousMessage) {
+      deduped.push(message);
+      continue;
+    }
+
+    const sameRole = previousMessage.role === message.role;
+    const sameContent =
+      normalizeMessageContent(previousMessage.content) === normalizeMessageContent(message.content);
+    const timeDiffMs = Math.abs(
+      new Date(message.created_at).getTime() - new Date(previousMessage.created_at).getTime()
+    );
+    const isNearDuplicate = sameRole && sameContent && Number.isFinite(timeDiffMs) && timeDiffMs <= 5000;
+
+    if (!isNearDuplicate) {
+      deduped.push(message);
+      continue;
+    }
+
+    const mergedContextFiles = Array.from(
+      new Set([...(previousMessage.context_files || []), ...(message.context_files || [])])
+    );
+    deduped[deduped.length - 1] = {
+      ...previousMessage,
+      context_files: mergedContextFiles.length > 0 ? mergedContextFiles : undefined,
+    };
+  }
+
+  return deduped;
+}
+
+export function ChatPanel({
+  jobId,
+  isCompleted,
+  initialMessage,
+  graphContext,
+  pendingPrompt,
+  pendingGraphContext,
+  onPendingPromptConsumed,
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [activeGraphContext, setActiveGraphContext] = useState<GraphContext | undefined>(graphContext);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const sendingRef = useRef(false);
+  const handledPendingKeyRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (isCompleted && jobId) {
-      loadChatHistory();
-    }
-  }, [jobId, isCompleted]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  const loadChatHistory = async () => {
+  const loadChatHistory = useCallback(async () => {
     try {
       setIsLoadingHistory(true);
       const response = await fetch(`/api/jobs/${jobId}/chat`);
       if (!response.ok) throw new Error('Failed to load chat history');
-      
+
       const data = await response.json();
-      setMessages(data.messages || []);
+      setMessages(dedupeChatMessages(data.messages || []));
     } catch (err) {
       console.error('Failed to load chat history:', err);
     } finally {
       setIsLoadingHistory(false);
     }
-  };
+  }, [jobId]);
 
-  const sendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    const message = input.trim();
-    if (!message || isLoading) return;
+  const sendChatMessage = useCallback(async (message: string, graphContext?: GraphContext) => {
+    const normalizedMessage = message.trim();
+    if (!normalizedMessage || sendingRef.current) return;
 
+    sendingRef.current = true;
     setInput('');
     setIsLoading(true);
     setError(null);
@@ -67,7 +127,7 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
     setMessages(prev => [...prev, {
       id: tempId,
       role: 'user',
-      content: message,
+      content: normalizedMessage,
       created_at: new Date().toISOString(),
     }]);
 
@@ -75,7 +135,10 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
       const response = await fetch(`/api/jobs/${jobId}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ 
+          message: normalizedMessage,
+          graphContext: graphContext ?? activeGraphContext,
+        }),
       });
 
       if (!response.ok) {
@@ -83,31 +146,69 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
         throw new Error(data.error || 'Failed to send message');
       }
 
-      const data = await response.json();
-      
-      // Remove temp message and add real messages
+      // Remove temp message
       setMessages(prev => prev.filter(m => m.id !== tempId));
-      
-      // Add user message (from server response would be ideal but we're adding optimistically)
-      setMessages(prev => [...prev, {
-        id: `user-${Date.now()}`,
-        role: 'user',
-        content: message,
-        created_at: new Date().toISOString(),
-      }, {
-        id: `assistant-${Date.now()}`,
-        role: 'assistant',
-        content: data.response,
-        context_files: data.contextFiles,
-        created_at: new Date().toISOString(),
-      }]);
+
+      // Reload chat history to get messages with database IDs
+      // This prevents duplicates by ensuring all messages use consistent IDs
+      await loadChatHistory();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message');
       // Remove temp message on error
       setMessages(prev => prev.filter(m => m.id !== tempId));
     } finally {
+      sendingRef.current = false;
       setIsLoading(false);
+      setActiveGraphContext(undefined);
     }
+  }, [activeGraphContext, jobId, loadChatHistory]);
+
+  // Update input and context when props change
+  useEffect(() => {
+    if (!initialMessage) return;
+    setInput((previousInput) => (initialMessage !== previousInput ? initialMessage : previousInput));
+  }, [initialMessage]);
+
+  useEffect(() => {
+    if (graphContext) {
+      setActiveGraphContext(graphContext);
+    }
+  }, [graphContext]);
+
+  useEffect(() => {
+    if (isCompleted && jobId) {
+      loadChatHistory();
+    }
+  }, [isCompleted, jobId, loadChatHistory]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  useEffect(() => {
+    if (!pendingPrompt || !isCompleted || sendingRef.current) return;
+
+    const pendingKey = `${normalizeMessageContent(pendingPrompt)}::${getGraphContextKey(
+      pendingGraphContext
+    )}`;
+    if (handledPendingKeyRef.current === pendingKey) return;
+    handledPendingKeyRef.current = pendingKey;
+
+    setInput(pendingPrompt);
+    sendChatMessage(pendingPrompt, pendingGraphContext).finally(() => {
+      onPendingPromptConsumed?.();
+    });
+  }, [isCompleted, onPendingPromptConsumed, pendingGraphContext, pendingPrompt, sendChatMessage]);
+
+  useEffect(() => {
+    if (!pendingPrompt) {
+      handledPendingKeyRef.current = null;
+    }
+  }, [pendingPrompt]);
+
+  const sendMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await sendChatMessage(input);
   };
 
   if (!isCompleted) {
@@ -131,7 +232,7 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
           Ask questions about this codebase
         </CardTitle>
       </CardHeader>
-      
+
       <div className="flex-1 overflow-y-auto px-4">
         {isLoadingHistory ? (
           <div className="flex items-center justify-center py-8">
@@ -199,6 +300,11 @@ export function ChatPanel({ jobId, isCompleted }: ChatPanelProps) {
       )}
 
       <CardContent className="pt-3">
+        {activeGraphContext && (
+          <div className="mb-2 px-2 py-1 text-xs text-muted-foreground bg-muted/50 rounded">
+            Based on: {activeGraphContext.nodeLabel}
+          </div>
+        )}
         <form onSubmit={sendMessage} className="flex gap-2">
           <Input
             placeholder="Ask about the codebase..."
