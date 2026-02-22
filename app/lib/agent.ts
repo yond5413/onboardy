@@ -858,3 +858,170 @@ export async function analyzeRepoIterative(
 
   return result;
 }
+
+/**
+ * Analyze repository ownership using GitHub API
+ * Identifies contributors who can be asked questions about the codebase
+ * Scores by: commit count, recent activity, and file relevance
+ * 
+ * @param githubUrl - Full GitHub repository URL
+ * @param jobId - Job ID for progress updates
+ * @param onProgress - Optional progress callback
+ * @returns OwnershipData with globalOwners sorted by confidence
+ */
+export async function analyzeOwnership(
+  githubUrl: string,
+  jobId: string,
+  onProgress?: (message: string) => void
+): Promise<OwnershipData> {
+  const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+  
+  const progress = (message: string) => {
+    console.log(`[Ownership] ${message}`);
+    onProgress?.(message);
+  };
+
+  progress('Analyzing repository ownership...');
+
+  // Extract owner and repo from URL
+  const match = githubUrl.match(/github\.com\/([^\/]+)\/([^\/]+)/);
+  if (!match) {
+    throw new Error('Invalid GitHub URL format');
+  }
+  
+  const [_, owner, repo] = match;
+  const repoName = repo.replace(/\.git$/, '');
+
+  // Fetch contributors from GitHub API
+  const contributorsUrl = `https://api.github.com/repos/${owner}/${repoName}/contributors?per_page=50`;
+  
+  const headers: Record<string, string> = {
+    'Accept': 'application/vnd.github.v3+json',
+  };
+  
+  if (GITHUB_TOKEN) {
+    headers['Authorization'] = `token ${GITHUB_TOKEN}`;
+  }
+
+  progress('Fetching contributors from GitHub...');
+  
+  const contributorsResponse = await fetch(contributorsUrl, { headers });
+  
+  if (!contributorsResponse.ok) {
+    const errorText = await contributorsResponse.text();
+    console.error(`[Ownership] GitHub API error: ${contributorsResponse.status} - ${errorText}`);
+    // Return empty ownership data instead of failing
+    return { components: {}, globalOwners: [] };
+  }
+
+  const contributors = await contributorsResponse.json();
+  
+  if (!Array.isArray(contributors) || contributors.length === 0) {
+    progress('No contributors found for repository');
+    return { components: {}, globalOwners: [] };
+  }
+
+  // Filter out bots
+  const humanContributors = contributors.filter(
+    (c: { login: string; type: string }) => 
+      !c.login.includes('[bot]') && c.type !== 'Bot'
+  );
+
+  progress(`Found ${humanContributors.length} human contributors`);
+
+  // Get additional details for each contributor (recent commits)
+  const owners: OwnerInfo[] = [];
+  const threeMonthsAgo = new Date();
+  threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+
+  for (const contributor of humanContributors.slice(0, 15)) {
+    try {
+      // Get commit count for this contributor
+      const commitsUrl = `https://api.github.com/repos/${owner}/${repoName}/commits?author=${contributor.login}&per_page=1`;
+      const commitsResponse = await fetch(commitsUrl, { headers });
+      
+      let totalCommits = contributor.contributions || 0;
+      let recentCommits = 0;
+      let lastCommitDate = new Date().toISOString();
+
+      if (commitsResponse.ok) {
+        const linkHeader = commitsResponse.headers.get('Link');
+        if (linkHeader) {
+          // Parse total from Link  header:<https://api.github.com/repos/.../commits?page=2>; rel="last"
+          const match = linkHeader.match(/page=(\d+)>; rel="last"/);
+          if (match) {
+            totalCommits = parseInt(match[1], 10);
+          }
+        }
+        
+        // Check if we can get recent commit dates
+        const commitsData = await commitsResponse.json();
+        if (Array.isArray(commitsData) && commitsData.length > 0) {
+          lastCommitDate = commitsData[0].commit.author.date;
+          
+          // Count commits from last 3 months
+          recentCommits = commitsData.filter((c: { commit: { author: { date: string } } }) => {
+            const commitDate = new Date(c.commit.author.date);
+            return commitDate >= threeMonthsAgo;
+          }).length;
+        }
+      }
+
+      // Build reasons array
+      const reasons: string[] = [];
+      if (totalCommits > 50) {
+        reasons.push(`${totalCommits} total commits to the repository`);
+      }
+      if (recentCommits > 0) {
+        reasons.push(`${recentCommits} commits in the last 3 months`);
+      }
+      if (contributor.contributions > 10) {
+        reasons.push(`Top ${Math.round((humanContributors.indexOf(contributor) / humanContributors.length) * 100)}% contributor`);
+      }
+
+      // Calculate confidence score (0-1)
+      // Factors: commit count (40%), recent activity (35%), rank (25%)
+      const commitScore = Math.min(totalCommits / 100, 1) * 0.4;
+      const recentScore = Math.min(recentCommits / 10, 1) * 0.35;
+      const rankScore = (1 - humanContributors.indexOf(contributor) / humanContributors.length) * 0.25;
+      const confidence = Math.min(commitScore + recentScore + rankScore, 1);
+
+      // Get email if available from GitHub API
+      let email = '';
+      try {
+        const userResponse = await fetch(`https://api.github.com/users/${contributor.login}`, { headers });
+        if (userResponse.ok) {
+          const userData = await userResponse.json();
+          email = userData.email || '';
+        }
+      } catch {
+        // Ignore email fetch errors
+      }
+
+      owners.push({
+        name: contributor.login,
+        email,
+        confidence,
+        reasons,
+        lastCommitDate,
+        commitCount: totalCommits,
+        recentCommitCount: recentCommits,
+      });
+    } catch (error) {
+      console.error(`[Ownership] Failed to get details for ${contributor.login}:`, error);
+    }
+  }
+
+  // Sort by confidence score (descending)
+  owners.sort((a, b) => b.confidence - a.confidence);
+
+  // Take top 10 owners
+  const topOwners = owners.slice(0, 10);
+
+  progress(`Ownership analysis complete: ${topOwners.length} owners identified`);
+
+  return {
+    components: {},
+    globalOwners: topOwners,
+  };
+}

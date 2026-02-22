@@ -3,7 +3,7 @@ import { createClient } from '@/app/lib/supabase/server';
 import { jobStore } from '@/app/lib/jobs';
 import { createAnalysisSandbox, pauseSandbox, cloneRepoToSandbox, collectAnalysisContext } from '@/app/lib/blaxel';
 import type { SandboxInstance } from '@blaxel/core';
-import { analyzeRepoWithAgent, generateDiagramWithAgent, type DiagramResult } from '@/app/lib/agent';
+import { analyzeRepoWithAgent, generateDiagramWithAgent, analyzeOwnership, type OwnershipData, type DiagramResult } from '@/app/lib/agent';
 import { generateTTS } from '@/app/lib/elevenlabs';
 import { generatePodcastScript, type PodcastStyle } from '@/app/lib/script';
 import { exportAnalysisOutputs, type ExportPaths } from '@/app/lib/storage/export';
@@ -227,6 +227,16 @@ async function processJob(
       console.error(`[${jobId}] Failed to collect analysis context:`, contextError);
     }
 
+    // Step 3: Analyze ownership
+    let ownershipData: OwnershipData | undefined;
+    try {
+      console.log(`[${jobId}] Analyzing repository ownership...`);
+      ownershipData = await analyzeOwnership(githubUrl, jobId);
+      console.log(`[${jobId}] Ownership analysis complete: ${ownershipData.globalOwners.length} owners found`);
+    } catch (ownershipError) {
+      console.error(`[${jobId}] Failed to analyze ownership:`, ownershipError);
+    }
+
     // Update patterns if available
     if (diagramResult?.patterns && analysisContext) {
       analysisContext.patterns = {
@@ -245,6 +255,7 @@ async function processJob(
       analysis_metrics: analysisMetrics || undefined,
       analysis_context: analysisContext,
       react_flow_data: reactFlowData,
+      ownership_data: ownershipData,
       completed_at: new Date().toISOString(),
     }).eq('id', jobId);
 

@@ -804,20 +804,41 @@ export default function JobDetailPage() {
             </TabsContent>
 
             <TabsContent value="details" className="mt-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Analysis Details</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {job.analysis_context ? (
-                    <AnalysisContextViewer context={job.analysis_context} />
-                  ) : (
-                    <div className="text-center py-12 text-muted-foreground">
-                      No detailed analysis context available for this job
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+              <div className="space-y-6">
+                {/* Ownership Section */}
+                {job.ownership_data?.globalOwners && job.ownership_data.globalOwners.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <User className="h-5 w-5" />
+                        Who to Ask
+                      </CardTitle>
+                      <p className="text-sm text-muted-foreground mt-2">
+                        Contributors who can help answer questions about this codebase
+                      </p>
+                    </CardHeader>
+                    <CardContent>
+                      <OwnerList owners={job.ownership_data.globalOwners} maxDisplay={5} />
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Analysis Context Section */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Analysis Details</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {job.analysis_context ? (
+                      <AnalysisContextViewer context={job.analysis_context} />
+                    ) : (
+                      <div className="text-center py-12 text-muted-foreground">
+                        No detailed analysis context available for this job
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
             </TabsContent>
 
             <TabsContent value="explore" className="mt-6">

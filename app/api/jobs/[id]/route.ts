@@ -87,6 +87,7 @@ export async function GET(
       analysis_context: job.analysis_context,
       sandbox_paused: job.sandbox_paused,
       react_flow_data: job.react_flow_data,
+      ownership_data: job.ownership_data,
       is_public: job.is_public,
       share_token: job.share_token,
     });
