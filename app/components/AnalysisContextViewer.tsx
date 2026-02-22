@@ -9,6 +9,13 @@ interface SourceFile {
   exports?: string[];
 }
 
+interface CodePatterns {
+  framework: string;
+  architecture: string;
+  keyModules: string[];
+  primaryLanguage?: string;
+}
+
 interface ConfigFile {
   content: string;
   keyDeps?: string[];
@@ -24,11 +31,7 @@ interface AnalysisContext {
   };
   configFiles: Record<string, ConfigFile>;
   sourceFiles: SourceFile[];
-  patterns: {
-    framework: string;
-    architecture: string;
-    keyModules: string[];
-  };
+  patterns: CodePatterns;
   metadata?: {
     linesOfCode?: number;
     fileCount?: number;
@@ -97,33 +100,48 @@ export function AnalysisContextViewer({ context, maxSummaryLength = 150 }: Analy
     <div className="space-y-4">
       {/* Repository Info */}
       <div className="bg-zinc-50 dark:bg-zinc-800 p-4 rounded-lg">
-        <h3 className="text-lg font-semibold text-zinc-800 dark:text-zinc-200 mb-2">
+        <h3 className="text-lg font-semibold text-zinc-800 dark:text-zinc-200 mb-3">
           Repository Information
         </h3>
-        <div className="grid grid-cols-2 gap-4 text-sm">
-          <div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+          <div className="col-span-2">
             <span className="text-zinc-500 dark:text-zinc-400">URL:</span>
-            <span className="ml-2 text-zinc-700 dark:text-zinc-300">{context.repositoryUrl}</span>
+            <a 
+              href={context.repositoryUrl} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="ml-2 text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              {context.repositoryUrl.replace('https://github.com/', '')}
+            </a>
           </div>
           <div>
             <span className="text-zinc-500 dark:text-zinc-400">Collected:</span>
             <span className="ml-2 text-zinc-700 dark:text-zinc-300">
-              {new Date(context.collectedAt).toLocaleString()}
+              {new Date(context.collectedAt).toLocaleDateString()}
             </span>
           </div>
+          {context.metadata?.fileCount && (
+            <div>
+              <span className="text-zinc-500 dark:text-zinc-400">Total Files:</span>
+              <span className="ml-2 text-zinc-700 dark:text-zinc-300 font-medium">
+                {context.metadata.fileCount.toLocaleString()}
+              </span>
+            </div>
+          )}
           {context.metadata?.linesOfCode && (
             <div>
               <span className="text-zinc-500 dark:text-zinc-400">Lines of Code:</span>
-              <span className="ml-2 text-zinc-700 dark:text-zinc-300">
+              <span className="ml-2 text-zinc-700 dark:text-zinc-300 font-medium">
                 {context.metadata.linesOfCode.toLocaleString()}
               </span>
             </div>
           )}
-          {context.metadata?.fileCount && (
+          {context.metadata?.testFiles && context.metadata.testFiles.length > 0 && (
             <div>
-              <span className="text-zinc-500 dark:text-zinc-400">Files:</span>
-              <span className="ml-2 text-zinc-700 dark:text-zinc-300">
-                {context.metadata.fileCount.toLocaleString()}
+              <span className="text-zinc-500 dark:text-zinc-400">Test Files:</span>
+              <span className="ml-2 text-zinc-700 dark:text-zinc-300 font-medium">
+                {context.metadata.testFiles.length}
               </span>
             </div>
           )}
@@ -132,91 +150,102 @@ export function AnalysisContextViewer({ context, maxSummaryLength = 150 }: Analy
 
       {/* Patterns */}
       <CollapsibleSection title="Patterns & Framework" defaultExpanded={true}>
-        <div className="space-y-3">
-          <div>
-            <span className="text-zinc-500 dark:text-zinc-400 text-sm">Framework:</span>
-            <span className="ml-2 text-zinc-800 dark:text-zinc-200 font-medium">
-              {context.patterns.framework || 'Not detected'}
-            </span>
-          </div>
-          <div>
-            <span className="text-zinc-500 dark:text-zinc-400 text-sm">Architecture:</span>
-            <span className="ml-2 text-zinc-800 dark:text-zinc-200 font-medium">
-              {context.patterns.architecture || 'Not detected'}
-            </span>
-          </div>
-          {context.patterns.keyModules.length > 0 && (
+        <div className="grid grid-cols-2 gap-4">
+          {(context.patterns.primaryLanguage && context.patterns.primaryLanguage !== 'Unknown') && (
             <div>
-              <span className="text-zinc-500 dark:text-zinc-400 text-sm block mb-1">Key Modules:</span>
-              <div className="flex flex-wrap gap-2">
-                {context.patterns.keyModules.map((module, idx) => (
-                  <span
-                    key={idx}
-                    className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 text-xs rounded"
-                  >
-                    {module}
-                  </span>
-                ))}
-              </div>
+              <span className="text-zinc-500 dark:text-zinc-400 text-sm block">Language</span>
+              <span className="text-zinc-800 dark:text-zinc-200 font-medium">
+                {context.patterns.primaryLanguage}
+              </span>
             </div>
           )}
+          <div>
+            <span className="text-zinc-500 dark:text-zinc-400 text-sm block">Framework</span>
+            <span className="text-zinc-800 dark:text-zinc-200 font-medium">
+              {context.patterns.framework !== 'Unknown' ? context.patterns.framework : 'Not detected'}
+            </span>
+          </div>
+          <div>
+            <span className="text-zinc-500 dark:text-zinc-400 text-sm block">Architecture</span>
+            <span className="text-zinc-800 dark:text-zinc-200 font-medium">
+              {context.patterns.architecture !== 'Unknown' ? context.patterns.architecture : 'Not detected'}
+            </span>
+          </div>
         </div>
+        {context.patterns.keyModules.length > 0 && (
+          <div className="mt-4">
+            <span className="text-zinc-500 dark:text-zinc-400 text-sm block mb-2">Key Modules</span>
+            <div className="flex flex-wrap gap-2">
+              {context.patterns.keyModules.map((module, idx) => (
+                <span
+                  key={idx}
+                  className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 text-xs rounded"
+                >
+                  {module}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </CollapsibleSection>
 
       {/* Structure */}
       <CollapsibleSection title="Project Structure">
         <div className="space-y-4">
-          {context.structure.rootFiles.length > 0 && (
-            <div>
-              <h4 className="text-sm font-medium text-zinc-800 dark:text-zinc-200 mb-2">
-                Root Files ({context.structure.rootFiles.length})
-              </h4>
-              <ul className="grid grid-cols-2 gap-1 text-sm">
-                {context.structure.rootFiles.slice(0, 10).map((file, idx) => (
-                  <li key={idx} className="text-zinc-600 dark:text-zinc-400 font-mono text-xs">
-                    {file}
-                  </li>
-                ))}
-                {context.structure.rootFiles.length > 10 && (
-                  <li className="text-zinc-500 dark:text-zinc-500 text-xs italic">
-                    +{context.structure.rootFiles.length - 10} more...
-                  </li>
-                )}
-              </ul>
-            </div>
-          )}
-          
-          {context.structure.directories.length > 0 && (
-            <div>
-              <h4 className="text-sm font-medium text-zinc-800 dark:text-zinc-200 mb-2">
-                Directories ({context.structure.directories.length})
-              </h4>
-              <ul className="grid grid-cols-2 gap-1 text-sm">
-                {context.structure.directories.slice(0, 10).map((dir, idx) => (
-                  <li key={idx} className="text-zinc-600 dark:text-zinc-400 font-mono text-xs">
-                    {dir}/
-                  </li>
-                ))}
-                {context.structure.directories.length > 10 && (
-                  <li className="text-zinc-500 dark:text-zinc-500 text-xs italic">
-                    +{context.structure.directories.length - 10} more...
-                  </li>
-                )}
-              </ul>
-            </div>
-          )}
-
           {context.structure.entryPoints.length > 0 && (
             <div>
               <h4 className="text-sm font-medium text-zinc-800 dark:text-zinc-200 mb-2">
                 Entry Points
               </h4>
               <ul className="space-y-1">
-                {context.structure.entryPoints.map((entry, idx) => (
+                {context.structure.entryPoints.slice(0, 5).map((entry, idx) => (
                   <li key={idx} className="text-zinc-600 dark:text-zinc-400 font-mono text-xs">
-                    → {entry}
+                    <span className="text-green-600 dark:text-green-400">→</span> {entry.replace('/repo/', '')}
                   </li>
                 ))}
+              </ul>
+            </div>
+          )}
+
+          {context.structure.directories.length > 0 && (
+            <div>
+              <h4 className="text-sm font-medium text-zinc-800 dark:text-zinc-200 mb-2">
+                Directory Structure ({context.structure.directories.length} folders)
+              </h4>
+              <div className="flex flex-wrap gap-2">
+                {context.structure.directories.slice(0, 15).map((dir, idx) => (
+                  <span
+                    key={idx}
+                    className="px-2 py-1 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 text-xs rounded font-mono"
+                  >
+                    {dir}/
+                  </span>
+                ))}
+                {context.structure.directories.length > 15 && (
+                  <span className="px-2 py-1 text-zinc-500 dark:text-zinc-500 text-xs italic">
+                    +{context.structure.directories.length - 15} more...
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+          
+          {context.structure.rootFiles.length > 0 && (
+            <div>
+              <h4 className="text-sm font-medium text-zinc-800 dark:text-zinc-200 mb-2">
+                Root Files
+              </h4>
+              <ul className="grid grid-cols-2 gap-1 text-sm">
+                {context.structure.rootFiles.slice(0, 12).map((file, idx) => (
+                  <li key={idx} className="text-zinc-600 dark:text-zinc-400 font-mono text-xs">
+                    {file}
+                  </li>
+                ))}
+                {context.structure.rootFiles.length > 12 && (
+                  <li className="text-zinc-500 dark:text-zinc-500 text-xs italic">
+                    +{context.structure.rootFiles.length - 12} more...
+                  </li>
+                )}
               </ul>
             </div>
           )}

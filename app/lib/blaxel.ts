@@ -109,13 +109,13 @@ export async function cloneRepoToSandbox(
           'https://github.com/',
           `https://${githubToken}@github.com/`
         );
-        cloneCommand = `git clone --depth 1 "${authUrl}" /repo 2>&1`;
+        cloneCommand = `git clone "${authUrl}" /repo 2>&1`;
       } else {
-        cloneCommand = `git clone --depth 1 "${githubUrl}" /repo 2>&1`;
+        cloneCommand = `git clone "${githubUrl}" /repo 2>&1`;
       }
 
       // Execute clone command in sandbox directly to /repo
-      console.log(`[Clone] Executing: git clone --depth 1 <url> /repo`);
+      console.log(`[Clone] Executing: git clone <url> /repo`);
       const process_result = await sandbox.process.exec({
         command: cloneCommand,
         timeout: 120000, // 2 minute timeout for clone
@@ -205,6 +205,58 @@ export async function cloneRepoToSandbox(
 }
 
 /**
+ * Ensure the repository exists in the sandbox at /repo.
+ *
+ * Uses the Blaxel SDK filesystem API (sandbox.fs.ls) instead of process.exec
+ * because process.exec shell commands return empty results after sandbox
+ * standby/resume, while the HTTP filesystem API remains reliable.
+ */
+export async function ensureRepoPresent(
+  sandbox: SandboxInstance,
+  githubUrl: string
+): Promise<{ ok: boolean; recloned: boolean; reason?: string }> {
+  try {
+    // Use the SDK filesystem API -- it's reliable even after standby
+    const dirListing = await sandbox.fs.ls('/repo');
+    const hasEntries = dirListing.files.length > 0 || dirListing.subdirectories.length > 0;
+    const hasGit = dirListing.subdirectories.some(d => d.name === '.git');
+
+    if (hasEntries && hasGit) {
+      return { ok: true, recloned: false };
+    }
+
+    const reason = !hasEntries ? 'repo_empty_or_missing' : 'missing_git_dir';
+    console.log(`[Repo] /repo not ready (${reason}). Re-cloning...`);
+
+    const cloneResult = await cloneRepoToSandbox(sandbox, githubUrl);
+    if (!cloneResult.success) {
+      return { ok: false, recloned: true, reason: cloneResult.error || 'clone_failed' };
+    }
+
+    return { ok: true, recloned: true, reason };
+  } catch (error) {
+    // If /repo doesn't exist at all, fs.ls throws -- treat as needing clone
+    const errMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.log(`[Repo] /repo check failed (${errMsg}). Re-cloning...`);
+
+    try {
+      const cloneResult = await cloneRepoToSandbox(sandbox, githubUrl);
+      if (!cloneResult.success) {
+        return { ok: false, recloned: true, reason: cloneResult.error || 'clone_failed' };
+      }
+      return { ok: true, recloned: true, reason: 'repo_dir_missing' };
+    } catch (cloneError) {
+      console.error('[Repo] ensureRepoPresent clone failed:', cloneError);
+      return {
+        ok: false,
+        recloned: false,
+        reason: cloneError instanceof Error ? cloneError.message : 'Unknown error',
+      };
+    }
+  }
+}
+
+/**
  * Validate that the agent is using sandbox MCP tools only
  * and not executing commands on the local filesystem
  */
@@ -215,78 +267,295 @@ export function validateSandboxIsolation(): void {
 }
 
 /**
- * Collect analysis context from the sandbox
- * Reads the .analysis-context.json file if it exists, or generates context from repo
+ * Extract framework from package.json dependencies
+ */
+function extractFramework(configContent: string): string {
+  try {
+    const pkg = JSON.parse(configContent);
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    
+    if (deps.next && deps.react) return 'Next.js with React';
+    if (deps.express) return 'Express.js';
+    if (deps.fastapi || deps.flask) return 'Python Flask/FastAPI';
+    if (deps.django) return 'Django';
+    if (deps.vue) return 'Vue.js';
+    if (deps.angular) return 'Angular';
+    if (deps.svelte) return 'Svelte';
+    if (deps.nest) return 'NestJS';
+    if (deps.spring) return 'Spring Boot';
+    if (deps.gin) return 'Go Gin';
+    
+    return 'Unknown';
+  } catch {
+    return 'Unknown';
+  }
+}
+
+/**
+ * Extract key modules from directories
+ */
+function extractKeyModules(directories: string[]): string[] {
+  const importantDirs = ['app', 'components', 'lib', 'utils', 'services', 'api', 'routes', 
+    'controllers', 'models', 'pages', 'src', 'hooks', 'store', 'middleware', 'types',
+    'core', 'modules', 'features', 'views', 'templates', 'public', 'private'];
+  
+  return directories
+    .filter(dir => importantDirs.includes(dir) || dir.startsWith('@'))
+    .slice(0, 8);
+}
+
+/**
+ * Extract key dependencies from package.json
+ */
+function extractKeyDeps(configContent: string): string[] {
+  try {
+    const pkg = JSON.parse(configContent);
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    const priorityDeps = ['next', 'react', 'react-dom', 'express', 'typescript', 'tailwindcss',
+      'prisma', 'mongoose', 'postgresql', 'redis', 'axios', 'zod', 'trpc', 'anthropic', 'openai'];
+    
+    return priorityDeps.filter(dep => deps[dep]).slice(0, 6);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Detect primary language from file extensions.
+ * Uses a single sandbox.fs.find call instead of 12+ process.exec calls.
+ */
+async function detectPrimaryLanguage(sandbox: SandboxInstance): Promise<string> {
+  const langExtensions: Record<string, string> = {
+    '.ts': 'TypeScript',
+    '.tsx': 'TypeScript/React',
+    '.js': 'JavaScript',
+    '.jsx': 'JavaScript/React',
+    '.py': 'Python',
+    '.go': 'Go',
+    '.java': 'Java',
+    '.rb': 'Ruby',
+    '.rs': 'Rust',
+    '.php': 'PHP',
+    '.cs': 'C#',
+    '.cpp': 'C++',
+    '.c': 'C',
+  };
+
+  try {
+    // Single find call with all source-code patterns
+    const findResult = await sandbox.fs.find('/repo', {
+      type: 'file',
+      patterns: [
+        '*.ts', '*.tsx', '*.js', '*.jsx', '*.py', '*.go',
+        '*.java', '*.rb', '*.rs', '*.php', '*.cs', '*.cpp', '*.c',
+      ],
+      excludeDirs: ['node_modules', '.git', 'dist', 'build', '.next'],
+      maxResults: 5000,
+    });
+
+    if (!findResult.matches || findResult.matches.length === 0) {
+      return 'Unknown';
+    }
+
+    // Count occurrences by extension
+    const counts: Record<string, number> = {};
+    for (const match of findResult.matches) {
+      const dotIdx = match.path.lastIndexOf('.');
+      if (dotIdx !== -1) {
+        const ext = match.path.slice(dotIdx);
+        counts[ext] = (counts[ext] || 0) + 1;
+      }
+    }
+
+    let maxExt = '';
+    let maxCount = 0;
+    for (const [ext, count] of Object.entries(counts)) {
+      if (count > maxCount && langExtensions[ext]) {
+        maxCount = count;
+        maxExt = ext;
+      }
+    }
+
+    return langExtensions[maxExt] || 'Unknown';
+  } catch {
+    return 'Unknown';
+  }
+}
+
+/**
+ * Collect analysis context from the sandbox.
+ *
+ * Uses the Blaxel SDK filesystem API (sandbox.fs.*) instead of process.exec
+ * shell commands, because process.exec returns empty results after sandbox
+ * standby/resume while the HTTP filesystem API remains reliable.
  */
 export async function collectAnalysisContext(
   sandbox: SandboxInstance,
   githubUrl: string
 ): Promise<import('./types').AnalysisContext | undefined> {
   try {
-    // Try to read the analysis context file if it exists
-    const contextResult = await sandbox.process.exec({
-      command: 'cat /repo/.analysis-context.json 2>/dev/null || echo "{}"',
-      timeout: 10000,
-    });
-
-    if (contextResult.exitCode === 0 && contextResult.stdout) {
-      const contextData = JSON.parse(contextResult.stdout);
-      if (Object.keys(contextData).length > 0) {
-        console.log('[AnalysisContext] Loaded from .analysis-context.json');
-        return contextData as import('./types').AnalysisContext;
-      }
+    // Ensure /repo is present (sandboxes may scale-to-zero on idle)
+    const repoStatus = await ensureRepoPresent(sandbox, githubUrl);
+    if (!repoStatus.ok) {
+      console.error('[AnalysisContext] Repo not available:', repoStatus.reason);
+      // Return minimal context so UI can still render
+      return minimalContext(githubUrl);
     }
 
-    // If no context file, generate basic context from repo structure
-    console.log('[AnalysisContext] Generating from repo structure...');
-    
-    // Get root files and directories
-    const structureResult = await sandbox.process.exec({
-      command: 'ls -la /repo 2>/dev/null | tail -n +4',
-      timeout: 5000,
-    });
+    // Try to read .analysis-context.json via the filesystem API
+    let existingContext: Partial<import('./types').AnalysisContext> | null = null;
+    try {
+      const raw = await sandbox.fs.read('/repo/.analysis-context.json');
+      if (raw && raw.trim() !== '{}') {
+        existingContext = JSON.parse(raw);
+      }
+    } catch {
+      // File doesn't exist -- that's fine, we'll generate from scratch
+    }
 
+    if (existingContext && Object.keys(existingContext).length > 0) {
+      console.log('[AnalysisContext] Loaded from .analysis-context.json');
+      const incomingStructure = existingContext.structure;
+      const hasIncomingStructure =
+        !!incomingStructure &&
+        Array.isArray(incomingStructure.rootFiles) &&
+        Array.isArray(incomingStructure.directories) &&
+        Array.isArray(incomingStructure.entryPoints) &&
+        (incomingStructure.rootFiles.length > 0 ||
+          incomingStructure.directories.length > 0 ||
+          incomingStructure.entryPoints.length > 0);
+
+      if (
+        hasIncomingStructure &&
+        existingContext.patterns &&
+        existingContext.configFiles &&
+        Array.isArray(existingContext.sourceFiles)
+      ) {
+        return {
+          repositoryUrl: existingContext.repositoryUrl || githubUrl,
+          collectedAt: existingContext.collectedAt || new Date().toISOString(),
+          structure: incomingStructure!,
+          configFiles: existingContext.configFiles,
+          sourceFiles: existingContext.sourceFiles,
+          patterns: {
+            framework: existingContext.patterns.framework || 'Unknown',
+            architecture: existingContext.patterns.architecture || 'Unknown',
+            keyModules: existingContext.patterns.keyModules || [],
+            primaryLanguage: existingContext.patterns.primaryLanguage,
+          },
+          metadata: existingContext.metadata,
+        };
+      }
+      // Fall through to generate structure/config from repo
+    }
+
+    // ── Generate context using the SDK filesystem API ──────────────
+    console.log('[AnalysisContext] Generating from repo structure via fs API...');
+
+    // 1. Root listing via sandbox.fs.ls (reliable, proven by agents)
     const rootFiles: string[] = [];
     const directories: string[] = [];
-    
-    if (structureResult.exitCode === 0 && structureResult.stdout) {
-      structureResult.stdout.split('\n').forEach((line: string) => {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 9) {
-          const name = parts[parts.length - 1];
-          if (line.startsWith('d')) {
-            directories.push(name);
-          } else if (!name.startsWith('.')) {
-            rootFiles.push(name);
-          }
+    try {
+      const dirListing = await sandbox.fs.ls('/repo');
+      for (const f of dirListing.files) {
+        if (!f.name.startsWith('.')) {
+          rootFiles.push(f.name);
         }
-      });
-    }
-
-    // Find entry points (common patterns)
-    const entryPoints: string[] = [];
-    const entryPointResult = await sandbox.process.exec({
-      command: 'find /repo -maxdepth 2 -type f \( -name "index.*" -o -name "main.*" -o -name "app.*" -o -name "server.*" \) 2>/dev/null | head -20',
-      timeout: 5000,
-    });
-    
-    if (entryPointResult.exitCode === 0 && entryPointResult.stdout) {
-      entryPoints.push(...entryPointResult.stdout.split('\n').filter(Boolean));
-    }
-
-    // Collect config files
-    const configFiles: Record<string, { content: string; keyDeps?: string[] }> = {};
-    const configPatterns = ['package.json', 'tsconfig.json', 'requirements.txt', 'Cargo.toml', 'go.mod', 'pom.xml', 'build.gradle', 'Dockerfile'];
-    
-    for (const configFile of configPatterns) {
-      const configResult = await sandbox.process.exec({
-        command: `cat /repo/${configFile} 2>/dev/null || echo ""`,
-        timeout: 5000,
-      });
-      
-      if (configResult.exitCode === 0 && configResult.stdout && configResult.stdout.trim()) {
-        configFiles[configFile] = { content: configResult.stdout };
       }
+      for (const d of dirListing.subdirectories) {
+        if (!d.name.startsWith('.')) {
+          directories.push(d.name);
+        }
+      }
+      console.log(`[AnalysisContext] Root listing: ${rootFiles.length} files, ${directories.length} dirs`);
+    } catch (lsErr) {
+      console.error('[AnalysisContext] fs.ls /repo failed:', lsErr);
+    }
+
+    // 2. Entry points via sandbox.fs.find
+    const entryPoints: string[] = [];
+    try {
+      const epResult = await sandbox.fs.find('/repo', {
+        type: 'file',
+        patterns: ['index.*', 'main.*', 'app.*', 'server.*', 'cli.*'],
+        excludeDirs: ['node_modules', '.git', 'dist', 'build', '.next'],
+        maxResults: 20,
+      });
+      for (const match of epResult.matches) {
+        entryPoints.push(match.path);
+      }
+    } catch (findErr) {
+      console.error('[AnalysisContext] fs.find entry points failed:', findErr);
+    }
+
+    // 3. Config files via sandbox.fs.read
+    const configFiles: Record<string, { content: string; keyDeps?: string[] }> = {};
+    const configPatterns = [
+      'package.json', 'tsconfig.json', 'requirements.txt', 'Cargo.toml',
+      'go.mod', 'pom.xml', 'build.gradle', 'Dockerfile',
+    ];
+    for (const configFile of configPatterns) {
+      try {
+        const content = await sandbox.fs.read(`/repo/${configFile}`);
+        if (content && content.trim()) {
+          const keyDeps = configFile === 'package.json' ? extractKeyDeps(content) : undefined;
+          configFiles[configFile] = { content, keyDeps };
+        }
+      } catch {
+        // File doesn't exist -- skip
+      }
+    }
+
+    // 4. Framework / architecture detection
+    let framework = 'Unknown';
+    let architecture = 'Unknown';
+    if (configFiles['package.json']) {
+      framework = extractFramework(configFiles['package.json'].content);
+      if (directories.includes('app') && directories.includes('api')) {
+        architecture = 'Next.js App Router';
+      } else if (directories.includes('pages') && directories.includes('api')) {
+        architecture = 'Next.js Pages Router';
+      } else if (directories.includes('src') && directories.includes('components')) {
+        architecture = 'SPA with Components';
+      } else if (directories.includes('routes') || directories.includes('controllers')) {
+        architecture = 'MVC Pattern';
+      }
+    }
+
+    // 5. Key modules
+    const keyModules = extractKeyModules(directories);
+
+    // 6. Primary language (uses sandbox.fs.find internally)
+    const primaryLanguage = await detectPrimaryLanguage(sandbox);
+
+    // 7. Metadata via sandbox.fs.find
+    const metadata: { linesOfCode?: number; fileCount?: number; testFiles?: string[] } = {};
+
+    // File count
+    try {
+      const allFiles = await sandbox.fs.find('/repo', {
+        type: 'file',
+        excludeDirs: ['node_modules', '.git', 'dist', 'build', '.next'],
+        maxResults: 50000,
+      });
+      metadata.fileCount = allFiles.total;
+    } catch {
+      // non-critical
+    }
+
+    // Test files
+    try {
+      const testResult = await sandbox.fs.find('/repo', {
+        type: 'file',
+        patterns: ['*.test.ts', '*.test.tsx', '*.spec.ts', '*.spec.tsx', '*.test.js', '*.spec.js'],
+        excludeDirs: ['node_modules', '.git'],
+        maxResults: 20,
+      });
+      if (testResult.matches.length > 0) {
+        metadata.testFiles = testResult.matches.map(m => m.path);
+      }
+    } catch {
+      // non-critical
     }
 
     const context: import('./types').AnalysisContext = {
@@ -300,16 +569,38 @@ export async function collectAnalysisContext(
       configFiles,
       sourceFiles: [],
       patterns: {
-        framework: 'Unknown',
-        architecture: 'Unknown',
-        keyModules: [],
+        framework,
+        architecture,
+        keyModules,
+        primaryLanguage,
       },
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     };
 
-    console.log('[AnalysisContext] Generated basic context');
+    console.log(`[AnalysisContext] Generated context: ${rootFiles.length} root files, ${directories.length} dirs, ${entryPoints.length} entry points`);
     return context;
   } catch (error) {
     console.error('[AnalysisContext] Failed to collect:', error);
-    return undefined;
+    return minimalContext(githubUrl);
   }
+}
+
+/** Return a minimal context so the UI can always render something. */
+function minimalContext(githubUrl: string): import('./types').AnalysisContext {
+  return {
+    repositoryUrl: githubUrl,
+    collectedAt: new Date().toISOString(),
+    structure: {
+      rootFiles: [],
+      directories: [],
+      entryPoints: [],
+    },
+    configFiles: {},
+    sourceFiles: [],
+    patterns: {
+      framework: 'Unknown',
+      architecture: 'Unknown',
+      keyModules: [],
+    },
+  };
 }

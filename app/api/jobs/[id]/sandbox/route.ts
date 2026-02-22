@@ -39,14 +39,13 @@ export async function DELETE(
     // Delete the sandbox
     try {
       await deleteSandbox(job.sandboxName);
+      console.log(`[Sandbox] Manually deleted sandbox ${job.sandboxName} for job ${jobId}`);
       
       // Update job to reflect sandbox deletion
       jobStore.update(jobId, {
         sandboxPaused: false,
         status: 'destroyed',
       });
-
-      console.log(`[Sandbox] Manually deleted sandbox ${job.sandboxName} for job ${jobId}`);
 
       return NextResponse.json({
         success: true,
