@@ -1,11 +1,12 @@
-export type PodcastStyle = 'technical' | 'overview';
+export type PodcastStyle = 'technical' | 'overview' | 'quick' | 'standard' | 'detailed';
 
 export type PodcastDuration = 'quick' | 'standard' | 'detailed';
 export type PodcastTone = 'professional' | 'casual' | 'technical';
 export type PodcastAudience = 'executive' | 'developer' | 'beginner';
+export type PodcastContentStyle = 'overview' | 'technical';
 
 export interface PodcastSettings {
-  style: PodcastStyle;
+  style: PodcastContentStyle;
   duration: PodcastDuration;
   tone: PodcastTone;
   audience: PodcastAudience;
@@ -30,7 +31,7 @@ interface OpenRouterResponse {
   }>;
 }
 
-const SYSTEM_PROMPTS: Record<PodcastStyle, string> = {
+const SYSTEM_PROMPTS: Record<PodcastContentStyle, string> = {
   technical: `You are a technical architect creating a podcast script about a software system.
 
 Create a single-narrator podcast script that is technical but accessible. Focus on:
@@ -71,8 +72,9 @@ Guidelines:
  */
 export async function generatePodcastScript(
   markdown: string,
-  style: PodcastStyle,
-  repoName: string
+  contentStyle: PodcastContentStyle,
+  repoName: string,
+  settings?: PodcastSettings
 ): Promise<string> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
@@ -80,7 +82,41 @@ export async function generatePodcastScript(
     return '';
   }
 
-  console.log(`[Script] Generating ${style} podcast script for ${repoName}`);
+  console.log(`[Script] Generating ${contentStyle} podcast script for ${repoName}`, settings);
+
+  const duration = settings?.duration || 'standard';
+  const tone = settings?.tone || 'professional';
+  const audience = settings?.audience || 'developer';
+  const wordTarget = DURATION_WORDS[duration];
+
+  const toneGuidance: Record<PodcastTone, string> = {
+    professional: 'Use a polished, business-appropriate tone with clear articulation.',
+    casual: 'Use a friendly, conversational tone as if chatting with a colleague.',
+    technical: 'Use precise technical terminology with authoritative explanations.',
+  };
+
+  const audienceGuidance: Record<PodcastAudience, string> = {
+    executive: 'Focus on business value, ROI, and high-level strategic implications.',
+    developer: 'Include technical details, code patterns, and implementation specifics.',
+    beginner: 'Explain concepts simply, avoid jargon, and provide context for each component.',
+  };
+
+  const styleGuidance = contentStyle === 'technical' 
+    ? 'Dive deep into technical architecture, design patterns, and implementation details.'
+    : 'Provide a high-level overview focusing on what the system does and how it solves problems.';
+
+  const systemPrompt = `You are a technical architect creating a podcast script about a software system.
+
+Create a single-narrator podcast script. ${styleGuidance}
+
+${toneGuidance[tone]}
+${audienceGuidance[audience]}
+
+Guidelines:
+- Target ${wordTarget.min}-${wordTarget.max} words (${wordTarget.minutes} minutes at 150-160 WPM)
+- Include a brief intro hook and conclusion
+- Use smooth transitions between sections
+- Format as clean paragraphs, no stage directions or sound effects`;
 
   // Clean up markdown to remove mermaid diagrams and excessive formatting
   const cleanedMarkdown = markdown
@@ -92,7 +128,7 @@ export async function generatePodcastScript(
   const messages: OpenRouterMessage[] = [
     {
       role: 'system',
-      content: SYSTEM_PROMPTS[style],
+      content: systemPrompt,
     },
     {
       role: 'user',

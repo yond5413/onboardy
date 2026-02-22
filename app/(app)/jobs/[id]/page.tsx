@@ -32,7 +32,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import mermaid from 'mermaid';
-import type { PodcastStyle, PodcastSettings } from '@/app/lib/script';
+import type { PodcastContentStyle, PodcastSettings } from '@/app/lib/script';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
 import { ArchitectureDiagram, type DiagramNodeData } from '@/app/components/ArchitectureDiagram';
 import { DataFlowDiagram, type DataFlowNodeData } from '@/app/components/DataFlowDiagram';
@@ -96,7 +96,7 @@ export default function JobDetailPage() {
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
   const [generatingPodcast, setGeneratingPodcast] = useState(false);
-  const [podcastStyle, setPodcastStyle] = useState<PodcastStyle>('overview');
+  const [podcastStyle, setPodcastStyle] = useState<PodcastContentStyle>('overview');
   const [selectedNode, setSelectedNode] = useState<Node<DiagramNodeData> | null>(null);
   const [nodeActionsPosition, setNodeActionsPosition] = useState<{ x: number; y: number } | null>(null);
   const [chatInitialMessage, setChatInitialMessage] = useState<string>('');
@@ -222,14 +222,15 @@ export default function JobDetailPage() {
     setActiveTab('chat');
   }
 
-  async function handleGeneratePodcast() {
+  async function handleGeneratePodcast(settings: PodcastSettings) {
     setGeneratingPodcast(true);
+    setSettingsModalOpen(false);
     
     try {
       const response = await fetch(`/api/jobs/${jobId}/podcast`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ podcastStyle }),
+        body: JSON.stringify(settings),
       });
 
       if (!response.ok) {
@@ -540,7 +541,7 @@ export default function JobDetailPage() {
                     Generate an AI-narrated podcast from your analysis
                   </p>
                   <Button 
-                    onClick={handleGeneratePodcast}
+                    onClick={() => setSettingsModalOpen(true)}
                     disabled={generatingPodcast}
                   >
                     {generatingPodcast ? (
@@ -841,6 +842,19 @@ export default function JobDetailPage() {
               </Card>
             </TabsContent>
           </Tabs>
+
+          {/* Podcast Settings Modal */}
+          <Dialog open={settingsModalOpen} onOpenChange={setSettingsModalOpen}>
+            <DialogContent className="sm:max-w-[500px]">
+              <PodcastSettingsModal
+                open={settingsModalOpen}
+                onOpenChange={setSettingsModalOpen}
+                onGenerate={handleGeneratePodcast}
+                isGenerating={generatingPodcast}
+                existingSettings={job.podcast_settings}
+              />
+            </DialogContent>
+          </Dialog>
         </>
       )}
     </div>
