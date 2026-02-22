@@ -109,13 +109,13 @@ export async function cloneRepoToSandbox(
           'https://github.com/',
           `https://${githubToken}@github.com/`
         );
-        cloneCommand = `git clone --depth 1 "${authUrl}" /repo 2>&1`;
+        cloneCommand = `git clone "${authUrl}" /repo 2>&1`;
       } else {
-        cloneCommand = `git clone --depth 1 "${githubUrl}" /repo 2>&1`;
+        cloneCommand = `git clone "${githubUrl}" /repo 2>&1`;
       }
 
       // Execute clone command in sandbox directly to /repo
-      console.log(`[Clone] Executing: git clone --depth 1 <url> /repo`);
+      console.log(`[Clone] Executing: git clone <url> /repo`);
       const process_result = await sandbox.process.exec({
         command: cloneCommand,
         timeout: 120000, // 2 minute timeout for clone

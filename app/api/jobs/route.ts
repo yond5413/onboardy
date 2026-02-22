@@ -408,9 +408,7 @@ async function processJob(
       const ownershipStartTime = await startStage('ownership');
       
       try {
-        await ensureRepoPresent(sandbox!, githubUrl);
-        
-        results.ownershipData = await analyzeOwnership(sandbox!, results.reactFlowData);
+        results.ownershipData = await analyzeOwnership(githubUrl, results.reactFlowData);
         console.log(`[${jobId}] Ownership analysis complete`);
         
         await completeStage('ownership', ownershipStartTime);

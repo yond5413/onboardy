@@ -991,18 +991,14 @@ export default function JobDetailPage() {
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
                   <CardTitle>Sandbox Explorer</CardTitle>
-                  {!job.sandbox_paused && (
-                    <Button variant="destructive" size="sm" onClick={handleDeleteSandbox}>
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Delete Sandbox
-                    </Button>
-                  )}
+                  <Button variant="destructive" size="sm" onClick={handleDeleteSandbox}>
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete Sandbox
+                  </Button>
                 </CardHeader>
                 <CardContent>
                   <SandboxExplorer
                     jobId={jobId}
-                    sandboxPaused={job.sandbox_paused || false}
-                    onDeleteSandbox={handleDeleteSandbox}
                   />
                 </CardContent>
               </Card>

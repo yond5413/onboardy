@@ -5,7 +5,7 @@ import { SandboxInstance } from '@blaxel/core';
 import { ensureRepoPresent } from '@/app/lib/blaxel';
 
 // Types for exploration actions
-type ExploreAction = 'read' | 'glob' | 'grep';
+type ExploreAction = 'read' | 'list' | 'grep';
 
 interface ExploreRequest {
   action: ExploreAction;
@@ -27,7 +27,7 @@ interface ExploreResponse {
  * Explore files in the sandbox for a completed job
  * Actions:
  * - read: Read a file's contents (params: path)
- * - glob: Find files matching a pattern (params: pattern)
+ * - list: List directory contents (params: path)
  * - grep: Search for content in files (params: pattern, content)
  */
 export async function POST(
@@ -45,20 +45,12 @@ export async function POST(
       );
     }
 
-    // Only allow exploration for jobs with paused sandboxes
-    if (!job.sandboxPaused) {
-      return NextResponse.json(
-        { success: false, error: 'Sandbox is not available for exploration. Job must be completed with paused sandbox.' },
-        { status: 400 }
-      );
-    }
-
     const body: ExploreRequest = await request.json();
     const { action, params: actionParams } = body;
 
     if (!action) {
       return NextResponse.json(
-        { success: false, error: 'Action is required (read, glob, or grep)' },
+        { success: false, error: 'Action is required (read, list, or grep)' },
         { status: 400 }
       );
     }
@@ -81,26 +73,30 @@ export async function POST(
     }
 
     // Ensure /repo exists (sandboxes may scale-to-zero on idle)
-    try {
-      let githubUrl = job.githubUrl;
-      if (!githubUrl) {
-        const supabase = await createClient();
-        const { data: jobData } = await supabase
-          .from('jobs')
-          .select('github_url')
-          .eq('id', jobId)
-          .single();
-        githubUrl = jobData?.github_url;
-      }
+    let githubUrl = job.githubUrl;
+    if (!githubUrl) {
+      const supabase = await createClient();
+      const { data: jobData } = await supabase
+        .from('jobs')
+        .select('github_url')
+        .eq('id', jobId)
+        .single();
+      githubUrl = jobData?.github_url;
+    }
 
-      if (githubUrl) {
-        const ensured = await ensureRepoPresent(sandbox, githubUrl);
-        if (!ensured.ok) {
-          console.error(`[Explore] Failed to ensure repo present:`, ensured.reason);
-        }
+    if (githubUrl) {
+      const ensured = await ensureRepoPresent(sandbox, githubUrl);
+      if (!ensured.ok) {
+        return NextResponse.json(
+          { success: false, error: `Failed to prepare repository: ${ensured.reason}` },
+          { status: 500 }
+        );
       }
-    } catch (repoError) {
-      console.error(`[Explore] Failed to ensure /repo:`, repoError);
+    } else {
+      return NextResponse.json(
+        { success: false, error: 'No GitHub URL found for this job' },
+        { status: 400 }
+      );
     }
 
     // Execute the requested action
@@ -119,45 +115,47 @@ export async function POST(
         const safePath = actionParams.path.replace(/\.\./g, '');
         const fullPath = safePath.startsWith('/repo/') ? safePath : `/repo/${safePath}`;
         
-        const readResult = await sandbox.process.exec({
-          command: `cat "${fullPath}" 2>&1`,
-          timeout: 30000,
-        });
-        
-        if (readResult.exitCode !== 0) {
+        // Use fs.read instead of process.exec - fs API is reliable after sandbox resume
+        try {
+          const fileContent = await sandbox.fs.read(fullPath);
+          result = {
+            path: fullPath,
+            content: fileContent,
+          };
+        } catch (readError) {
           return NextResponse.json(
-            { success: false, error: `Failed to read file: ${readResult.stderr || readResult.stdout}` },
+            { success: false, error: `Failed to read file: ${readError instanceof Error ? readError.message : 'Unknown error'}` },
             { status: 500 }
           );
         }
         
-        result = {
-          path: fullPath,
-          content: readResult.stdout,
-        };
         break;
       }
       
-      case 'glob': {
-        if (!actionParams.pattern) {
+      case 'list': {
+        const listPath = actionParams.path || '/repo';
+        const safePath = listPath.replace(/\.\./g, '').replace(/[;&|`$]/g, '');
+        
+        // Use fs.ls instead of process.exec - fs API is reliable after sandbox resume
+        try {
+          const dirListing = await sandbox.fs.ls(safePath);
+          
+          const entries = [
+            ...dirListing.subdirectories.map(d => ({ name: d.name + '/', type: 'directory' as const })),
+            ...dirListing.files.map(f => ({ name: f.name, type: 'file' as const }))
+          ];
+          
+          result = {
+            path: safePath,
+            entries,
+          };
+        } catch (listError) {
           return NextResponse.json(
-            { success: false, error: 'Pattern parameter is required for glob action' },
-            { status: 400 }
+            { success: false, error: `Failed to list directory: ${listError instanceof Error ? listError.message : 'Unknown error'}` },
+            { status: 500 }
           );
         }
         
-        // Security: Sanitize pattern
-        const safePattern = actionParams.pattern.replace(/[;&|`$]/g, '');
-        
-        const globResult = await sandbox.process.exec({
-          command: `find /repo -type f -name "${safePattern}" 2>/dev/null | head -50`,
-          timeout: 30000,
-        });
-        
-        result = {
-          pattern: actionParams.pattern,
-          files: globResult.stdout?.split('\n').filter(Boolean) || [],
-        };
         break;
       }
       
@@ -188,7 +186,7 @@ export async function POST(
       
       default:
         return NextResponse.json(
-          { success: false, error: `Unknown action: ${action}. Supported actions: read, glob, grep` },
+          { success: false, error: `Unknown action: ${action}. Supported actions: read, list, grep` },
           { status: 400 }
         );
     }

@@ -862,17 +862,77 @@ export async function analyzeRepoIterative(
 }
 
 /**
- * Analyze repository ownership using git log in sandbox
+ * Extract owner and repo from GitHub URL
+ */
+function parseGitHubUrl(githubUrl: string): { owner: string; repo: string } | null {
+  const match = githubUrl.match(/github\.com\/([^\/]+)\/([^\/]+?)(?:\.git)?$/);
+  if (!match) return null;
+  return { owner: match[1], repo: match[2].replace(/\.git$/, '') };
+}
+
+/**
+ * Call GitHub API with authentication
+ */
+async function fetchGitHubApi<T>(endpoint: string): Promise<T | null> {
+  const token = process.env.GITHUB_TOKEN;
+  const headers: Record<string, string> = {
+    'Accept': 'application/vnd.github.v3+json',
+  };
+  
+  if (token) {
+    headers['Authorization'] = `token ${token}`;
+  }
+
+  try {
+    const response = await fetch(`https://api.github.com${endpoint}`, { headers });
+    
+    if (!response.ok) {
+      console.log(`[Ownership] GitHub API error: ${response.status} ${response.statusText}`);
+      return null;
+    }
+    
+    return await response.json() as T;
+  } catch (error) {
+    console.log(`[Ownership] GitHub API fetch failed:`, error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
+interface GitHubContributor {
+  login: string;
+  id: number;
+  contributions: number;
+  html_url: string;
+  type: string;
+}
+
+interface GitHubCommit {
+  sha: string;
+  commit: {
+    author: {
+      name: string;
+      email: string;
+      date: string;
+    };
+    message: string;
+  };
+  author: {
+    login: string;
+    html_url: string;
+  } | null;
+}
+
+/**
+ * Analyze repository ownership using GitHub API
  * Identifies contributors who can be asked questions about the codebase
- * Uses git history for accurate file-level ownership
  * 
- * @param sandbox - Blaxel sandbox instance (repo already cloned)
+ * @param githubUrl - GitHub repository URL
  * @param reactFlowData - Architecture diagram data for component-level ownership
  * @param onProgress - Optional progress callback
  * @returns OwnershipData with globalOwners and component-specific owners
  */
 export async function analyzeOwnership(
-  sandbox: SandboxInstance,
+  githubUrl: string,
   reactFlowData?: { architecture: { nodes: Array<{ id: string; data: Record<string, unknown> }> } },
   onProgress?: (message: string) => void
 ): Promise<OwnershipData> {
@@ -881,170 +941,130 @@ export async function analyzeOwnership(
     onProgress?.(message);
   };
 
-  progress('Analyzing repository ownership via git log...');
+  progress('Analyzing repository ownership via GitHub API...');
 
-  // Step 1: Get global author commit counts using git shortlog
-  progress('Getting author commit counts...');
-  const shortlogResult = await sandbox.process.exec({
-    command: 'cd /repo && git shortlog -sne --since="2 years ago"',
-    timeout: 30000,
-  });
-
-  const authorCommitCounts = new Map<string, { name: string; email: string; count: number }>();
-  
-  if (shortlogResult.stdout) {
-    const lines = shortlogResult.stdout.split('\n').filter(Boolean);
-    for (const line of lines) {
-      const match = line.trim().match(/^\s*(\d+)\s+(.+?)\s+<(.+?)>$/);
-      if (match) {
-        const count = parseInt(match[1], 10);
-        const name = match[2].trim();
-        const email = match[3].trim();
-        
-        // Skip bots
-        if (name.includes('[bot]') || email.includes('[bot]') || email.includes('github-actions')) {
-          continue;
-        }
-        
-        // Use name as key, store both name and email
-        authorCommitCounts.set(name.toLowerCase(), { name, email, count });
-      }
-    }
+  const parsed = parseGitHubUrl(githubUrl);
+  if (!parsed) {
+    progress('Failed to parse GitHub URL');
+    return { components: {}, globalOwners: [] };
   }
 
-  progress(`Found ${authorCommitCounts.size} unique authors`);
+  const { owner, repo } = parsed;
+  progress(`Fetching contributors for ${owner}/${repo}...`);
 
-  // Step 2: Get file → author mapping using git log
-  progress('Building file ownership map...');
-  const fileAuthorCounts = new Map<string, Map<string, number>>();
-  
-  const logResult = await sandbox.process.exec({
-    command: 'cd /repo && git log --name-only --pretty=format:"%an|%ae" --since="2 years ago"',
-    timeout: 60000,
-  });
+  // Step 1: Get contributors via GitHub API
+  const contributors = await fetchGitHubApi<GitHubContributor[]>(
+    `/repos/${owner}/${repo}/contributors?per_page=100`
+  );
 
-  if (logResult.stdout) {
-    const lines = logResult.stdout.split('\n');
-    let currentAuthor = '';
-    let currentEmail = '';
-    
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      
-      // Check if this is an author line (contains | but not a file path)
-      if (trimmed.includes('|') && !trimmed.includes('/')) {
-        const parts = trimmed.split('|');
-        if (parts.length >= 2) {
-          currentAuthor = parts[0].trim();
-          currentEmail = parts[1].trim();
-        }
-      } else if (currentAuthor && currentEmail) {
-        // This is a file path
-        const filePath = trimmed;
-        if (filePath && !filePath.includes('.git')) {
-          if (!fileAuthorCounts.has(filePath)) {
-            fileAuthorCounts.set(filePath, new Map());
-          }
-          const authorMap = fileAuthorCounts.get(filePath)!;
-          const key = currentAuthor.toLowerCase();
-          authorMap.set(key, (authorMap.get(key) || 0) + 1);
-        }
-      }
-    }
+  if (!contributors || contributors.length === 0) {
+    progress('No contributors found or API rate limited');
+    return { components: {}, globalOwners: [] };
   }
 
-  progress(`Mapped ${fileAuthorCounts.size} files to authors`);
+  progress(`Found ${contributors.length} contributors`);
 
-  // Step 3: Check for CODEOWNERS file
-  let codeownersFile: string | undefined;
-  try {
-    const codeownersResult = await sandbox.process.exec({
-      command: 'cat /repo/.github/CODEOWNERS 2>/dev/null || echo ""',
-      timeout: 5000,
-    });
-    if (codeownersResult.stdout && codeownersResult.stdout.trim()) {
-      codeownersFile = codeownersResult.stdout;
-      progress('Found CODEOWNERS file');
-    }
-  } catch {
-    // CODEOWNERS doesn't exist - that's fine
-  }
-
-  // Step 4: Parse CODEOWNERS into pattern → owners map
-  const codeownersPatterns = new Map<string, string[]>();
-  if (codeownersFile) {
-    const lines = codeownersFile.split('\n');
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      
-      const parts = trimmed.split(/\s+/);
-      if (parts.length >= 2) {
-        const pattern = parts[0];
-        const owners = parts.slice(1).map(o => o.replace('@', '').toLowerCase());
-        codeownersPatterns.set(pattern, owners);
-      }
-    }
-  }
-
-  // Step 5: Calculate scores for each author
-  const authors = Array.from(authorCommitCounts.values());
-  const owners: OwnerInfo[] = [];
+  // Step 2: Get commit dates for each contributor (for recency)
+  // We'll fetch recent commits and track who made them
   const twoYearsAgo = new Date();
   twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+  const twoYearsAgoStr = twoYearsAgo.toISOString().split('T')[0];
 
-  for (const author of authors) {
-    // Count recent commits (last 90 days)
-    const recentResult = await sandbox.process.exec({
-      command: `cd /repo && git shortlog -sne --since="90 days ago" --author="${author.name}"`,
-      timeout: 10000,
-    });
+  const ninetyDaysAgo = new Date();
+  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+  const ninetyDaysAgoStr = ninetyDaysAgo.toISOString().split('T')[0];
+
+  // Get recent commits to calculate recency scores
+  const recentCommits = await fetchGitHubApi<GitHubCommit[]>(
+    `/repos/${owner}/${repo}/commits?since=${twoYearsAgoStr}&per_page=100`
+  );
+
+  // Count commits per author (last 2 years)
+  const authorCommitCounts = new Map<string, number>();
+  // Count commits per author (last 90 days)
+  const authorRecentCounts = new Map<string, number>();
+  // Track last commit date per author
+  const authorLastCommit = new Map<string, string>();
+
+  if (recentCommits) {
+    for (const commit of recentCommits) {
+      const authorName = commit.commit.author.name;
+      const commitDate = commit.commit.author.date;
+      
+      authorCommitCounts.set(authorName, (authorCommitCounts.get(authorName) || 0) + 1);
+      
+      if (commitDate >= ninetyDaysAgoStr) {
+        authorRecentCounts.set(authorName, (authorRecentCounts.get(authorName) || 0) + 1);
+      }
+      
+      // Update last commit date if this is more recent
+      const existingLast = authorLastCommit.get(authorName);
+      if (!existingLast || commitDate > existingLast) {
+        authorLastCommit.set(authorName, commitDate);
+      }
+    }
+  }
+
+  // Step 3: Build owner info from contributors + commit data
+  const owners: OwnerInfo[] = [];
+  
+  // Find max commits for normalization
+  const maxCommits = Math.max(...contributors.map(c => c.contributions));
+  const maxRecentCommits = Math.max(...Array.from(authorRecentCounts.values()), 1);
+
+  for (const contributor of contributors) {
+    // Skip bots
+    if (contributor.login.includes('[bot]') || contributor.type === 'Bot') {
+      continue;
+    }
+
+    const name = contributor.login;
+    const email = `${contributor.login}@users.noreply.github.com`;
+    const commitCount = contributor.contributions;
     
+    // Get commit counts from our recent commits analysis
+    // Use the contributor name as primary key, also check variations
     let recentCount = 0;
-    if (recentResult.stdout) {
-      const match = recentResult.stdout.trim().match(/^\s*(\d+)/);
-      if (match) {
-        recentCount = parseInt(match[1], 10);
+    let lastDate = authorLastCommit.get(name) || new Date().toISOString();
+    
+    // Try to match with analyzed commits
+    for (const [authorName, count] of authorRecentCounts) {
+      if (authorName.toLowerCase().includes(name.toLowerCase()) || 
+          name.toLowerCase().includes(authorName.toLowerCase())) {
+        recentCount = Math.max(recentCount, count);
       }
     }
 
-    // Get files modified by this author
-    const filesResult = await sandbox.process.exec({
-      command: `cd /repo && git log --pretty=format: --name-only --author="${author.name}" --since="2 years ago" | sort -u`,
-      timeout: 15000,
-    });
+    // Calculate confidence score - normalized against top contributor
+    // Top contributor always gets 100%, others get proportional share
+    const commitShare = commitCount / maxCommits;
+    const recentShare = recentCount / maxRecentCommits;
     
-    const filesModified = filesResult.stdout 
-      ? filesResult.stdout.split('\n').filter(f => f.trim() && !f.includes('.git'))
-      : [];
-
-    // Calculate confidence score
-    // Factors: commit volume (40%), recency (35%), file diversity (25%)
-    const commitScore = Math.min(author.count / 100, 1) * 0.4;
-    const recentScore = Math.min(recentCount / 20, 1) * 0.35;
-    const fileScore = Math.min(filesModified.length / 50, 1) * 0.25;
-    const confidence = Math.min(commitScore + recentScore + fileScore, 1);
+    // Base confidence from commit share (90%) + small recency bonus (10%)
+    const confidence = Math.min(commitShare * 0.9 + Math.min(recentShare * 0.1, 0.1), 1);
 
     // Build reasons
     const reasons: string[] = [];
-    reasons.push(`${author.count} commits in last 2 years`);
+    reasons.push(`${commitCount} total contributions`);
     if (recentCount > 0) {
       reasons.push(`${recentCount} commits in last 90 days`);
     }
-    if (filesModified.length > 0) {
-      reasons.push(`Modified ${filesModified.length} files`);
+    if (lastDate) {
+      const lastDateObj = new Date(lastDate);
+      const monthsAgo = Math.floor((Date.now() - lastDateObj.getTime()) / (1000 * 60 * 60 * 24 * 30));
+      if (monthsAgo < 12) {
+        reasons.push(`Active ${monthsAgo} months ago`);
+      }
     }
 
     owners.push({
-      name: author.name,
-      email: author.email,
+      name,
+      email,
       confidence,
       reasons,
-      lastCommitDate: new Date().toISOString(), // Would need another call to get actual date
-      commitCount: author.count,
+      lastCommitDate: lastDate,
+      commitCount,
       recentCommitCount: recentCount,
-      filesModified: filesModified.slice(0, 20), // Store top 20 files
     });
   }
 
@@ -1052,84 +1072,31 @@ export async function analyzeOwnership(
   owners.sort((a, b) => b.confidence - a.confidence);
   const globalOwners = owners.slice(0, 10);
 
-  // Step 6: Calculate component-specific ownership
+  // Step 4: Calculate component-specific ownership (if we have architecture data)
   const components: OwnershipData['components'] = {};
   
   if (reactFlowData?.architecture?.nodes) {
     progress('Calculating component-specific ownership...');
     
+    // For component-level, we'd need additional API calls per file
+    // For now, distribute global owners based on commit counts
     for (const node of reactFlowData.architecture.nodes) {
       const nodeId = node.id;
       const nodeLabel = String(node.data?.label || nodeId);
-      const keyFiles = (node.data?.keyFiles as string[]) || [];
       
-      // If no keyFiles in node data, try to infer from fileAuthorCounts
-      let relevantFiles = keyFiles;
-      if (relevantFiles.length === 0) {
-        // Find files that might belong to this component based on path
-        const componentKeywords = nodeLabel.toLowerCase().split(/\s+/);
-        relevantFiles = [];
-        
-        for (const filePath of Array.from(fileAuthorCounts.keys())) {
-          const fileLower = filePath.toLowerCase();
-          if (componentKeywords.some(kw => kw.length > 2 && fileLower.includes(kw))) {
-            relevantFiles.push(filePath);
-          }
-        }
-        
-        // Limit to 5 files per component
-        relevantFiles = relevantFiles.slice(0, 5);
-      }
+      // Get top contributors for this component (simplified - would need file-specific API calls)
+      const componentOwners = globalOwners.slice(0, 3).map(owner => ({
+        ...owner,
+        confidence: owner.confidence * 0.8, // Slightly lower confidence without file-specific data
+        reasons: [`Top contributor: ${owner.reasons[0]}`],
+      }));
 
-      if (relevantFiles.length > 0) {
-        // Calculate ownership for this component's files
-        const componentAuthorScores = new Map<string, { name: string; email: string; score: number; files: string[] }>();
-        
-        for (const file of relevantFiles) {
-          const authorMap = fileAuthorCounts.get(file);
-          if (authorMap) {
-            for (const [authorKey, count] of Array.from(authorMap.entries())) {
-              const globalAuthor = authorCommitCounts.get(authorKey);
-              if (globalAuthor) {
-                const existing = componentAuthorScores.get(authorKey) || { 
-                  name: globalAuthor.name, 
-                  email: globalAuthor.email, 
-                  score: 0, 
-                  files: [] 
-                };
-                existing.score += count;
-                existing.files.push(file);
-                componentAuthorScores.set(authorKey, existing);
-              }
-            }
-          }
-        }
-
-        // Convert to OwnerInfo and sort
-        const componentOwners: OwnerInfo[] = Array.from(componentAuthorScores.values())
-          .map(a => {
-            const maxScore = Math.max(...Array.from(componentAuthorScores.values()).map(x => x.score));
-            return {
-              name: a.name,
-              email: a.email,
-              confidence: maxScore > 0 ? a.score / maxScore : 0,
-              reasons: [`Modified ${a.files.length} files in this component`],
-              lastCommitDate: new Date().toISOString(),
-              commitCount: a.score,
-              recentCommitCount: 0,
-              filesModified: a.files,
-            };
-          })
-          .sort((a, b) => b.confidence - a.confidence)
-          .slice(0, 5);
-
-        components[nodeId] = {
-          componentId: nodeId,
-          componentLabel: nodeLabel,
-          owners: componentOwners,
-          keyFiles: relevantFiles,
-        };
-      }
+      components[nodeId] = {
+        componentId: nodeId,
+        componentLabel: nodeLabel,
+        owners: componentOwners,
+        keyFiles: [],
+      };
     }
   }
 
@@ -1138,7 +1105,6 @@ export async function analyzeOwnership(
   return {
     components,
     globalOwners,
-    codeownersFile,
   };
 }
   

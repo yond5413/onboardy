@@ -142,7 +142,7 @@ async function processRetry(
         .eq('id', jobId)
         .single();
       
-      ownershipData = await analyzeOwnership(sandbox, latestJob?.react_flow_data);
+      ownershipData = await analyzeOwnership(githubUrl, latestJob?.react_flow_data);
       
       await supabase
         .from('jobs')
