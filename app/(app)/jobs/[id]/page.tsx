@@ -19,6 +19,7 @@ import {
   Headphones,
   FileText,
   Layers,
+  GitBranch,
   Info,
   FolderOpen,
   Loader2,
@@ -34,6 +35,7 @@ import mermaid from 'mermaid';
 import type { PodcastStyle, PodcastSettings } from '@/app/lib/script';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
 import { ArchitectureDiagram, type DiagramNodeData } from '@/app/components/ArchitectureDiagram';
+import { DataFlowDiagram, type DataFlowNodeData } from '@/app/components/DataFlowDiagram';
 import { AnalysisContextViewer } from '@/app/components/AnalysisContextViewer';
 import { SandboxExplorer } from '@/app/components/SandboxExplorer';
 import { AgentLogStream } from '@/app/components/AgentLogStream';
@@ -105,6 +107,7 @@ export default function JobDetailPage() {
   const [pendingPrompt, setPendingPrompt] = useState('');
   const [pendingGraphContext, setPendingGraphContext] = useState<GraphContext | undefined>(undefined);
   const [selectedArchitectureNode, setSelectedArchitectureNode] = useState<Node<DiagramNodeData> | null>(null);
+  const [diagramView, setDiagramView] = useState<'architecture' | 'dataFlow'>('architecture');
   const mermaidRef = useRef<HTMLDivElement>(null);
 
   // Initialize mermaid
@@ -377,6 +380,15 @@ export default function JobDetailPage() {
     () => ((job?.react_flow_data?.architecture?.edges ?? []) as ReactFlowEdge[]),
     [job?.react_flow_data]
   );
+  const dataFlowNodes = useMemo(
+    () => ((job?.react_flow_data?.dataFlow?.nodes ?? []) as ReactFlowNode[]),
+    [job?.react_flow_data]
+  );
+  const dataFlowEdges = useMemo(
+    () => ((job?.react_flow_data?.dataFlow?.edges ?? []) as ReactFlowEdge[]),
+    [job?.react_flow_data]
+  );
+  const hasDataFlow = dataFlowNodes.length > 0;
   const qualityReport = useMemo(
     () => evaluateArchitectureDiagramQuality(architectureNodes, architectureEdges),
     [architectureNodes, architectureEdges]
@@ -658,51 +670,103 @@ export default function JobDetailPage() {
             <TabsContent value="architecture" className="mt-6">
               <Card>
                 <CardHeader>
-                  <CardTitle>Architecture Diagram</CardTitle>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>Diagrams</CardTitle>
+                    {/* Segmented toggle: System Architecture | Data Flow */}
+                    <div className="flex items-center rounded-lg border border-slate-700 bg-slate-800/60 p-0.5">
+                      <button
+                        onClick={() => setDiagramView('architecture')}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                          diagramView === 'architecture'
+                            ? 'bg-slate-700 text-slate-100 shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <Layers className="w-3.5 h-3.5" />
+                        System Architecture
+                      </button>
+                      <button
+                        onClick={() => hasDataFlow && setDiagramView('dataFlow')}
+                        disabled={!hasDataFlow}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                          diagramView === 'dataFlow'
+                            ? 'bg-slate-700 text-slate-100 shadow-sm'
+                            : hasDataFlow
+                              ? 'text-slate-400 hover:text-slate-200'
+                              : 'text-slate-600 cursor-not-allowed'
+                        }`}
+                      >
+                        <GitBranch className="w-3.5 h-3.5" />
+                        Data Flow
+                      </button>
+                    </div>
+                  </div>
                 </CardHeader>
                 <CardContent>
-                  {architectureNodes.length > 0 && (
-                    <DiagramQualityPanel report={qualityReport} className="mb-4" />
-                  )}
-                  {job.react_flow_data?.architecture?.nodes?.length > 0 ? (
-                    <div className="h-[600px] border rounded-lg overflow-hidden relative">
-                      <ArchitectureDiagram
-                        nodes={job.react_flow_data.architecture.nodes}
-                        edges={job.react_flow_data.architecture.edges}
-                        onNodeClick={handleNodeClick}
-                      />
-                      {selectedNode && nodeActionsPosition && (
-                        <NodeActionsMenu
-                          node={selectedNode}
-                          nodes={job.react_flow_data.architecture.nodes}
-                          edges={job.react_flow_data.architecture.edges}
-                          position={nodeActionsPosition}
-                          onSelectAction={handleActionSelect}
-                          onClose={handleCloseNodeActions}
-                        />
+                  {/* ── Architecture view ────────────────────────────── */}
+                  {diagramView === 'architecture' && (
+                    <>
+                      {architectureNodes.length > 0 && (
+                        <DiagramQualityPanel report={qualityReport} className="mb-4" />
                       )}
-                      {selectedArchitectureNode && (
-                        <div className="absolute bottom-4 left-4 bg-background/95 border rounded-lg p-3 shadow-lg">
-                          <p className="text-sm text-muted-foreground mb-2">
-                            Selected: <span className="font-medium text-foreground">{String(selectedArchitectureNode.data?.label || selectedArchitectureNode.id)}</span>
-                          </p>
-                          <div className="flex flex-wrap gap-2">
-                            <Button size="sm" variant="outline" onClick={() => startGraphContextChat('explain')}>Explain</Button>
-                            <Button size="sm" variant="outline" onClick={() => startGraphContextChat('trace')}>Trace Flow</Button>
-                            <Button size="sm" variant="outline" onClick={() => startGraphContextChat('debug')}>Debug</Button>
-                            <Button size="sm" variant="outline" onClick={() => startGraphContextChat('files')}>Files</Button>
-                          </div>
+                      {job.react_flow_data?.architecture?.nodes?.length > 0 ? (
+                        <div className="h-[600px] border rounded-lg overflow-hidden relative">
+                          <ArchitectureDiagram
+                            nodes={job.react_flow_data.architecture.nodes}
+                            edges={job.react_flow_data.architecture.edges}
+                            onNodeClick={handleNodeClick}
+                          />
+                          {selectedNode && nodeActionsPosition && (
+                            <NodeActionsMenu
+                              node={selectedNode}
+                              nodes={job.react_flow_data.architecture.nodes}
+                              edges={job.react_flow_data.architecture.edges}
+                              position={nodeActionsPosition}
+                              onSelectAction={handleActionSelect}
+                              onClose={handleCloseNodeActions}
+                            />
+                          )}
+                          {selectedArchitectureNode && (
+                            <div className="absolute bottom-4 left-4 bg-background/95 border rounded-lg p-3 shadow-lg">
+                              <p className="text-sm text-muted-foreground mb-2">
+                                Selected: <span className="font-medium text-foreground">{String(selectedArchitectureNode.data?.label || selectedArchitectureNode.id)}</span>
+                              </p>
+                              <div className="flex flex-wrap gap-2">
+                                <Button size="sm" variant="outline" onClick={() => startGraphContextChat('explain')}>Explain</Button>
+                                <Button size="sm" variant="outline" onClick={() => startGraphContextChat('trace')}>Trace Flow</Button>
+                                <Button size="sm" variant="outline" onClick={() => startGraphContextChat('debug')}>Debug</Button>
+                                <Button size="sm" variant="outline" onClick={() => startGraphContextChat('files')}>Files</Button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : job.markdown_content?.includes('```mermaid') ? (
+                        <div ref={mermaidRef} className="flex justify-center overflow-x-auto" />
+                      ) : (
+                        <div className="text-center py-12 text-muted-foreground">
+                          No architecture diagram available
                         </div>
                       )}
-                    </div>
-                  ) : job.markdown_content?.includes('```mermaid') ? (
-                    <div ref={mermaidRef} className="flex justify-center overflow-x-auto" />
-                  ) : (
-                    <div className="text-center py-12 text-muted-foreground">
-                      No architecture diagram available
-                    </div>
+                    </>
                   )}
 
+                  {/* ── Data Flow view ──────────────────────────────── */}
+                  {diagramView === 'dataFlow' && (
+                    <>
+                      {hasDataFlow ? (
+                        <div className="h-[600px] border rounded-lg overflow-hidden relative">
+                          <DataFlowDiagram
+                            nodes={dataFlowNodes as unknown as Node<DataFlowNodeData>[]}
+                            edges={dataFlowEdges as unknown as Edge[]}
+                          />
+                        </div>
+                      ) : (
+                        <div className="text-center py-12 text-muted-foreground">
+                          No data flow diagram available
+                        </div>
+                      )}
+                    </>
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>

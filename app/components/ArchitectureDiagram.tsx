@@ -8,6 +8,22 @@ import { RotateCcw } from 'lucide-react';
 
 import '@xyflow/react/dist/style.css';
 
+// Strip React Flow's default node wrapper styles so our custom nodes
+// render without a double-border / white-background artefact
+const nodeWrapperStyle = `
+  .architecture-diagram .react-flow__node {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    box-shadow: none;
+  }
+  .architecture-diagram .react-flow__node.selected > div,
+  .architecture-diagram .react-flow__node:focus > div {
+    outline: none;
+  }
+`;
+
 export interface DiagramNodeData extends Record<string, unknown> {
   label: string;
   description?: string;
@@ -132,10 +148,10 @@ const ServiceNode = memo(function ServiceNode({ data, selected }: NodeProps) {
   const description = nodeData.description ? truncateText(nodeData.description, MAX_DESCRIPTION_LENGTH) : undefined;
   return (
     <div
-      className={`px-4 py-3 rounded-lg border-2 shadow-lg min-w-[160px] text-center transition-all ${
+      className={`px-4 py-3 rounded-lg border-[2.5px] shadow-lg min-w-[160px] text-center transition-all ${
         selected
-          ? 'border-blue-400 bg-blue-800 shadow-blue-500/50'
-          : 'border-blue-600 bg-blue-950 hover:bg-blue-900/50'
+          ? 'border-blue-400 bg-blue-800 shadow-blue-500/30'
+          : 'border-blue-500 bg-blue-950 hover:bg-blue-900/50'
       }`}
     >
       <Handle type="target" position={Position.Top} className="!bg-blue-400 !w-3 !h-3" />
@@ -153,10 +169,10 @@ const DatabaseNode = memo(function DatabaseNode({ data, selected }: NodeProps) {
   const description = nodeData.description ? truncateText(nodeData.description, MAX_DESCRIPTION_LENGTH) : undefined;
   return (
     <div
-      className={`px-4 py-3 rounded-lg border-2 shadow-lg min-w-[160px] text-center transition-all ${
+      className={`px-4 py-3 rounded-lg border-[2.5px] shadow-lg min-w-[160px] text-center transition-all ${
         selected
-          ? 'border-emerald-400 bg-emerald-800 shadow-emerald-500/50'
-          : 'border-emerald-600 bg-emerald-950 hover:bg-emerald-900/50'
+          ? 'border-emerald-400 bg-emerald-800 shadow-emerald-500/30'
+          : 'border-emerald-500 bg-emerald-950 hover:bg-emerald-900/50'
       }`}
     >
       <Handle type="target" position={Position.Top} className="!bg-emerald-400 !w-3 !h-3" />
@@ -174,10 +190,10 @@ const ClientNode = memo(function ClientNode({ data, selected }: NodeProps) {
   const description = nodeData.description ? truncateText(nodeData.description, MAX_DESCRIPTION_LENGTH) : undefined;
   return (
     <div
-      className={`px-4 py-3 rounded-lg border-2 shadow-lg min-w-[160px] text-center transition-all ${
+      className={`px-4 py-3 rounded-lg border-[2.5px] shadow-lg min-w-[160px] text-center transition-all ${
         selected
-          ? 'border-purple-400 bg-purple-800 shadow-purple-500/50'
-          : 'border-purple-600 bg-purple-950 hover:bg-purple-900/50'
+          ? 'border-purple-400 bg-purple-800 shadow-purple-500/30'
+          : 'border-purple-500 bg-purple-950 hover:bg-purple-900/50'
       }`}
     >
       <Handle type="target" position={Position.Top} className="!bg-purple-400 !w-3 !h-3" />
@@ -195,10 +211,10 @@ const ExternalNode = memo(function ExternalNode({ data, selected }: NodeProps) {
   const description = nodeData.description ? truncateText(nodeData.description, MAX_DESCRIPTION_LENGTH) : undefined;
   return (
     <div
-      className={`px-4 py-3 rounded-lg border-2 shadow-lg min-w-[160px] text-center transition-all ${
+      className={`px-4 py-3 rounded-lg border-[2.5px] shadow-lg min-w-[160px] text-center transition-all ${
         selected
-          ? 'border-orange-400 bg-orange-800 shadow-orange-500/50'
-          : 'border-orange-600 bg-orange-950 hover:bg-orange-900/50'
+          ? 'border-orange-400 bg-orange-800 shadow-orange-500/30'
+          : 'border-orange-500 bg-orange-950 hover:bg-orange-900/50'
       }`}
     >
       <Handle type="target" position={Position.Top} className="!bg-orange-400 !w-3 !h-3" />
@@ -216,10 +232,10 @@ const GatewayNode = memo(function GatewayNode({ data, selected }: NodeProps) {
   const description = nodeData.description ? truncateText(nodeData.description, MAX_DESCRIPTION_LENGTH) : undefined;
   return (
     <div
-      className={`px-4 py-3 rounded-lg border-2 shadow-lg min-w-[160px] text-center transition-all ${
+      className={`px-4 py-3 rounded-lg border-[2.5px] shadow-lg min-w-[160px] text-center transition-all ${
         selected
-          ? 'border-red-400 bg-red-800 shadow-red-500/50'
-          : 'border-red-600 bg-red-950 hover:bg-red-900/50'
+          ? 'border-red-400 bg-red-800 shadow-red-500/30'
+          : 'border-red-500 bg-red-950 hover:bg-red-900/50'
       }`}
     >
       <Handle type="target" position={Position.Top} className="!bg-red-400 !w-3 !h-3" />
@@ -328,6 +344,7 @@ export function ArchitectureDiagram({
 
   return (
     <div className="architecture-diagram relative" style={{ width: '100%', height }}>
+      <style>{nodeWrapperStyle}</style>
       <ReactFlow
         nodes={nodes}
         edges={edges}

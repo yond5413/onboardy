@@ -5,13 +5,15 @@ import { useParams } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Loader2, Layers, FileText, Info, Github } from 'lucide-react';
+import { Loader2, Layers, GitBranch, FileText, Info, Github } from 'lucide-react';
 import mermaid from 'mermaid';
 import { MarkdownRenderer } from '@/app/components/MarkdownRenderer';
 import { ArchitectureDiagram } from '@/app/components/ArchitectureDiagram';
+import { DataFlowDiagram, type DataFlowNodeData } from '@/app/components/DataFlowDiagram';
 import { AnalysisContextViewer } from '@/app/components/AnalysisContextViewer';
 import { DiagramQualityPanel } from '@/app/components/DiagramQualityPanel';
 import { evaluateArchitectureDiagramQuality } from '@/app/lib/diagram-quality';
+import type { Node, Edge } from '@xyflow/react';
 import type { ReactFlowNode, ReactFlowEdge } from '@/app/lib/types';
 
 interface JobData {
@@ -32,6 +34,7 @@ export default function SharePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [activeTab, setActiveTab] = useState('design');
+  const [diagramView, setDiagramView] = useState<'architecture' | 'dataFlow'>('architecture');
   const mermaidRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -88,6 +91,15 @@ export default function SharePage() {
     () => ((job?.react_flow_data?.architecture?.edges ?? []) as ReactFlowEdge[]),
     [job?.react_flow_data]
   );
+  const dataFlowNodes = useMemo(
+    () => ((job?.react_flow_data?.dataFlow?.nodes ?? []) as ReactFlowNode[]),
+    [job?.react_flow_data]
+  );
+  const dataFlowEdges = useMemo(
+    () => ((job?.react_flow_data?.dataFlow?.edges ?? []) as ReactFlowEdge[]),
+    [job?.react_flow_data]
+  );
+  const hasDataFlow = dataFlowNodes.length > 0;
   const qualityReport = useMemo(
     () => evaluateArchitectureDiagramQuality(architectureNodes, architectureEdges),
     [architectureNodes, architectureEdges]
@@ -170,25 +182,77 @@ export default function SharePage() {
           <TabsContent value="architecture" className="mt-6">
             <Card>
               <CardHeader>
-                <CardTitle>Architecture Diagram</CardTitle>
+                <div className="flex items-center justify-between">
+                  <CardTitle>Diagrams</CardTitle>
+                  <div className="flex items-center rounded-lg border border-slate-700 bg-slate-800/60 p-0.5">
+                    <button
+                      onClick={() => setDiagramView('architecture')}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                        diagramView === 'architecture'
+                          ? 'bg-slate-700 text-slate-100 shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      System Architecture
+                    </button>
+                    <button
+                      onClick={() => hasDataFlow && setDiagramView('dataFlow')}
+                      disabled={!hasDataFlow}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                        diagramView === 'dataFlow'
+                          ? 'bg-slate-700 text-slate-100 shadow-sm'
+                          : hasDataFlow
+                            ? 'text-slate-400 hover:text-slate-200'
+                            : 'text-slate-600 cursor-not-allowed'
+                      }`}
+                    >
+                      <GitBranch className="w-3.5 h-3.5" />
+                      Data Flow
+                    </button>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
-                {architectureNodes.length > 0 && (
-                  <DiagramQualityPanel report={qualityReport} className="mb-4" />
+                {/* ── Architecture view ────────────────────────────── */}
+                {diagramView === 'architecture' && (
+                  <>
+                    {architectureNodes.length > 0 && (
+                      <DiagramQualityPanel report={qualityReport} className="mb-4" />
+                    )}
+                    {job.react_flow_data?.architecture?.nodes?.length > 0 ? (
+                      <div className="h-[600px] border rounded-lg overflow-hidden">
+                        <ArchitectureDiagram
+                          nodes={job.react_flow_data.architecture.nodes}
+                          edges={job.react_flow_data.architecture.edges}
+                        />
+                      </div>
+                    ) : job.markdown_content?.includes('```mermaid') ? (
+                      <div ref={mermaidRef} className="flex justify-center overflow-x-auto" />
+                    ) : (
+                      <div className="text-center py-12 text-muted-foreground">
+                        No architecture diagram available
+                      </div>
+                    )}
+                  </>
                 )}
-                {job.react_flow_data?.architecture?.nodes?.length > 0 ? (
-                  <div className="h-[600px] border rounded-lg overflow-hidden">
-                    <ArchitectureDiagram
-                      nodes={job.react_flow_data.architecture.nodes}
-                      edges={job.react_flow_data.architecture.edges}
-                    />
-                  </div>
-                ) : job.markdown_content?.includes('```mermaid') ? (
-                  <div ref={mermaidRef} className="flex justify-center overflow-x-auto" />
-                ) : (
-                  <div className="text-center py-12 text-muted-foreground">
-                    No architecture diagram available
-                  </div>
+
+                {/* ── Data Flow view ──────────────────────────────── */}
+                {diagramView === 'dataFlow' && (
+                  <>
+                    {hasDataFlow ? (
+                      <div className="h-[600px] border rounded-lg overflow-hidden relative">
+                        <DataFlowDiagram
+                          nodes={dataFlowNodes as unknown as Node<DataFlowNodeData>[]}
+                          edges={dataFlowEdges as unknown as Edge[]}
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-center py-12 text-muted-foreground">
+                        No data flow diagram available
+                      </div>
+                    )}
+                  </>
                 )}
               </CardContent>
             </Card>
