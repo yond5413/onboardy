@@ -28,7 +28,9 @@ import {
   MessageSquare,
   Share2,
   Edit3,
-  User
+  User,
+  AlertTriangle,
+  SkipForward
 } from 'lucide-react';
 import Link from 'next/link';
 import mermaid from 'mermaid';
@@ -104,6 +106,14 @@ interface JobData {
   sandbox_paused?: boolean;
   is_public?: boolean;
   share_token?: string;
+  stage_history?: {
+    clone?: { status: string; error?: string; durationMs?: number };
+    analysis?: { status: string; error?: string; durationMs?: number };
+    diagram?: { status: string; error?: string; durationMs?: number };
+    ownership?: { status: string; error?: string; durationMs?: number };
+    export?: { status: string; error?: string; durationMs?: number };
+  };
+  partial_status?: 'complete' | 'partial' | 'failed';
 }
 
 export default function JobDetailPage() {
@@ -127,6 +137,7 @@ export default function JobDetailPage() {
   const [pendingGraphContext, setPendingGraphContext] = useState<GraphContext | undefined>(undefined);
   const [selectedArchitectureNode, setSelectedArchitectureNode] = useState<Node<DiagramNodeData> | null>(null);
   const [diagramView, setDiagramView] = useState<'architecture' | 'dataFlow'>('architecture');
+  const [retryingStage, setRetryingStage] = useState<string | null>(null);
   const mermaidRef = useRef<HTMLDivElement>(null);
 
   // Initialize mermaid
@@ -362,6 +373,56 @@ export default function JobDetailPage() {
     }
   }
 
+  async function handleRetryStage(stage: string) {
+    if (!job) return;
+    
+    setRetryingStage(stage);
+    
+    try {
+      const response = await fetch(`/api/jobs/${jobId}/retry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to retry stage');
+      }
+
+      toast.success(`Retrying ${stage} stage...`);
+      
+      // Poll for completion
+      const pollInterval = setInterval(async () => {
+        const pollResponse = await fetch(`/api/jobs/${jobId}`);
+        if (pollResponse.ok) {
+          const data = await pollResponse.json();
+          const stageStatus = data.stage_history?.[stage]?.status;
+          if (stageStatus === 'completed' || stageStatus === 'failed') {
+            setJob(data);
+            setRetryingStage(null);
+            clearInterval(pollInterval);
+            if (stageStatus === 'completed') {
+              toast.success(`${stage} stage completed successfully`);
+            } else {
+              toast.error(`${stage} stage failed again`);
+            }
+          }
+        }
+      }, 3000);
+      
+      // Timeout after 5 minutes
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        setRetryingStage(null);
+      }, 5 * 60 * 1000);
+      
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to retry stage');
+      setRetryingStage(null);
+    }
+  }
+
   const handleNodeClick = (node: Node<DiagramNodeData>) => {
     setSelectedNode(node);
     setSelectedArchitectureNode(node);
@@ -546,6 +607,57 @@ export default function JobDetailPage() {
         <Alert variant="destructive">
           <XCircle className="h-4 w-4" />
           <AlertDescription>{job.error}</AlertDescription>
+        </Alert>
+      )}
+
+      {/* Partial Completion Warning */}
+      {job.status === 'completed' && job.partial_status === 'partial' && job.stage_history && (
+        <Alert className="border-orange-500/50 bg-orange-500/10">
+          <AlertTriangle className="h-4 w-4 text-orange-500" />
+          <AlertDescription className="text-orange-100">
+            <div className="space-y-3">
+              <p className="font-medium">Analysis completed with some failures</p>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(job.stage_history).map(([stage, info]) => {
+                  const stageInfo = info as { status: string; error?: string };
+                  if (stageInfo.status === 'failed') {
+                    return (
+                      <div key={stage} className="flex items-center gap-2 bg-background/50 rounded-md px-3 py-1.5">
+                        <XCircle className="h-3 w-3 text-red-500" />
+                        <span className="text-sm capitalize">{stage}</span>
+                        {retryingStage === stage ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 px-2 text-xs"
+                            onClick={() => handleRetryStage(stage)}
+                          >
+                            <RefreshCw className="h-3 w-3 mr-1" />
+                            Retry
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  }
+                  if (stageInfo.status === 'skipped') {
+                    return (
+                      <div key={stage} className="flex items-center gap-2 bg-background/50 rounded-md px-3 py-1.5">
+                        <SkipForward className="h-3 w-3 text-orange-400" />
+                        <span className="text-sm capitalize">{stage}</span>
+                        <span className="text-xs text-muted-foreground">(skipped)</span>
+                      </div>
+                    );
+                  }
+                  return null;
+                })}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Some results may be incomplete. You can retry failed stages individually.
+              </p>
+            </div>
+          </AlertDescription>
         </Alert>
       )}
 

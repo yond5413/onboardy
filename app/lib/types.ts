@@ -3,6 +3,51 @@ import type { AnalysisMetrics } from './cost-tracker';
 
 export type JobStatus = 'queued' | 'processing' | 'cloning' | 'analyzing' | 'generating' | 'completed' | 'failed' | 'destroyed' | 'generating_podcast';
 
+export type StageName = 'clone' | 'analysis' | 'diagram' | 'ownership' | 'export';
+
+export type StageStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped';
+
+export interface StageProgress {
+  current: number;
+  total: number;
+  unit: string;
+}
+
+export interface StageInfo {
+  status: StageStatus;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  error?: string;
+  skipReason?: string;
+  progress?: StageProgress;
+}
+
+export type StageHistory = Record<StageName, StageInfo>;
+
+export type PartialStatus = 'complete' | 'partial' | 'failed';
+
+export interface StageDependencies {
+  stage: StageName;
+  dependsOn: StageName[];
+}
+
+export const STAGE_DEPENDENCIES: StageDependencies[] = [
+  { stage: 'clone', dependsOn: [] },
+  { stage: 'analysis', dependsOn: ['clone'] },
+  { stage: 'diagram', dependsOn: ['analysis'] },
+  { stage: 'ownership', dependsOn: ['diagram'] },
+  { stage: 'export', dependsOn: ['analysis'] },
+];
+
+export const STAGE_CONFIG: Record<StageName, { label: string; weight: number; description: string }> = {
+  clone: { label: 'Cloning', weight: 10, description: 'Cloning repository to sandbox' },
+  analysis: { label: 'Analyzing', weight: 40, description: 'Analyzing codebase structure and logic' },
+  diagram: { label: 'Generating Diagram', weight: 25, description: 'Creating architecture diagram' },
+  ownership: { label: 'Finding Owners', weight: 15, description: 'Analyzing git history for ownership' },
+  export: { label: 'Exporting', weight: 10, description: 'Exporting analysis outputs' },
+};
+
 // React Flow node and edge types for diagram data
 export interface ReactFlowNode {
   id: string;

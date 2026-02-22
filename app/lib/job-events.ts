@@ -1,16 +1,21 @@
+import type { StageName, StageProgress } from './types';
+
 export interface JobEvent {
   id: string;
   jobId: string;
-  type: 'progress' | 'status' | 'complete' | 'error' | 'thinking' | 'tool_use' | 'stage_start' | 'stage_complete' | 'stage_failed';
+  type: 'progress' | 'status' | 'complete' | 'error' | 'thinking' | 'tool_use' | 'stage_start' | 'stage_complete' | 'stage_failed' | 'stage_progress' | 'stage_skipped';
   message: string;
   timestamp: number;
-  stage?: string;
+  stage?: StageName;
   progress?: number;
+  itemProgress?: StageProgress;
+  durationMs?: number;
+  error?: string;
+  skipReason?: string;
 }
 
 const MAX_BUFFER_SIZE = 100;
 
-// Use globalThis to ensure all Next.js route instances share the same Maps
 declare global {
   var __jobEventBuffers: Map<string, JobEvent[]> | undefined;
   var __jobEventListeners: Map<string, Set<(event: JobEvent) => void>> | undefined;
@@ -43,8 +48,14 @@ export function emitJobEvent(
   jobId: string,
   type: JobEvent['type'],
   message: string,
-  stage?: string,
-  progress?: number
+  options?: {
+    stage?: StageName;
+    progress?: number;
+    itemProgress?: StageProgress;
+    durationMs?: number;
+    error?: string;
+    skipReason?: string;
+  }
 ): void {
   const event: JobEvent = {
     id: generateEventId(),
@@ -52,8 +63,7 @@ export function emitJobEvent(
     type,
     message,
     timestamp: Date.now(),
-    stage,
-    progress,
+    ...options,
   };
 
   const buffer = getOrCreateBuffer(jobId);
@@ -95,16 +105,29 @@ export function clearJobEvents(jobId: string): void {
 }
 
 export const JobEvents = {
-  emitProgress: (jobId: string, message: string) => emitJobEvent(jobId, 'progress', message),
-  emitThinking: (jobId: string, message: string) => emitJobEvent(jobId, 'thinking', message),
+  emitProgress: (jobId: string, message: string) => 
+    emitJobEvent(jobId, 'progress', message),
+  emitThinking: (jobId: string, message: string) => 
+    emitJobEvent(jobId, 'thinking', message),
   emitToolUse: (jobId: string, toolName: string, input?: string) => 
     emitJobEvent(jobId, 'tool_use', `[Tool: ${toolName}]${input ? ` - ${input.substring(0, 100)}` : ''}`),
-  emitComplete: (jobId: string) => emitJobEvent(jobId, 'complete', 'Analysis complete!'),
-  emitError: (jobId: string, error: string) => emitJobEvent(jobId, 'error', error),
-  emitStageStart: (jobId: string, stage: string, message: string) => 
-    emitJobEvent(jobId, 'stage_start', message, stage),
-  emitStageComplete: (jobId: string, stage: string, message: string) => 
-    emitJobEvent(jobId, 'stage_complete', message, stage),
-  emitStageFailed: (jobId: string, stage: string, message: string) => 
-    emitJobEvent(jobId, 'stage_failed', message, stage),
+  emitComplete: (jobId: string) => 
+    emitJobEvent(jobId, 'complete', 'Analysis complete!'),
+  emitError: (jobId: string, error: string) => 
+    emitJobEvent(jobId, 'error', error, { error }),
+  
+  emitStageStart: (jobId: string, stage: StageName, message: string) => 
+    emitJobEvent(jobId, 'stage_start', message, { stage }),
+  
+  emitStageComplete: (jobId: string, stage: StageName, message: string, durationMs: number) => 
+    emitJobEvent(jobId, 'stage_complete', message, { stage, durationMs }),
+  
+  emitStageFailed: (jobId: string, stage: StageName, message: string, error?: string) => 
+    emitJobEvent(jobId, 'stage_failed', message, { stage, error }),
+  
+  emitStageProgress: (jobId: string, stage: StageName, message: string, itemProgress: StageProgress) => 
+    emitJobEvent(jobId, 'stage_progress', message, { stage, itemProgress }),
+  
+  emitStageSkipped: (jobId: string, stage: StageName, reason: string) => 
+    emitJobEvent(jobId, 'stage_skipped', `Skipped: ${reason}`, { stage, skipReason: reason }),
 };
