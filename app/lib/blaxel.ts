@@ -215,6 +215,116 @@ export function validateSandboxIsolation(): void {
 }
 
 /**
+ * Extract framework from package.json dependencies
+ */
+function extractFramework(configContent: string): string {
+  try {
+    const pkg = JSON.parse(configContent);
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    
+    if (deps.next && deps.react) return 'Next.js with React';
+    if (deps.express) return 'Express.js';
+    if (deps.fastapi || deps.flask) return 'Python Flask/FastAPI';
+    if (deps.django) return 'Django';
+    if (deps.vue) return 'Vue.js';
+    if (deps.angular) return 'Angular';
+    if (deps.svelte) return 'Svelte';
+    if (deps.nest) return 'NestJS';
+    if (deps.spring) return 'Spring Boot';
+    if (deps.gin) return 'Go Gin';
+    
+    return 'Unknown';
+  } catch {
+    return 'Unknown';
+  }
+}
+
+/**
+ * Extract key modules from directories
+ */
+function extractKeyModules(directories: string[]): string[] {
+  const importantDirs = ['app', 'components', 'lib', 'utils', 'services', 'api', 'routes', 
+    'controllers', 'models', 'pages', 'src', 'hooks', 'store', 'middleware', 'types',
+    'core', 'modules', 'features', 'views', 'templates', 'public', 'private'];
+  
+  return directories
+    .filter(dir => importantDirs.includes(dir) || dir.startsWith('@'))
+    .slice(0, 8);
+}
+
+/**
+ * Extract key dependencies from package.json
+ */
+function extractKeyDeps(configContent: string): string[] {
+  try {
+    const pkg = JSON.parse(configContent);
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    const priorityDeps = ['next', 'react', 'react-dom', 'express', 'typescript', 'tailwindcss',
+      'prisma', 'mongoose', 'postgresql', 'redis', 'axios', 'zod', 'trpc', 'anthropic', 'openai'];
+    
+    return priorityDeps.filter(dep => deps[dep]).slice(0, 6);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Detect primary language from file extensions
+ */
+async function detectPrimaryLanguage(sandbox: SandboxInstance): Promise<string> {
+  const langExtensions: Record<string, string> = {
+    '.ts': 'TypeScript',
+    '.tsx': 'TypeScript/React',
+    '.js': 'JavaScript',
+    '.jsx': 'JavaScript/React',
+    '.py': 'Python',
+    '.go': 'Go',
+    '.java': 'Java',
+    '.rb': 'Ruby',
+    '.rs': 'Rust',
+    '.php': 'PHP',
+    '.cs': 'C#',
+    '.cpp': 'C++',
+    '.c': 'C',
+  };
+
+  try {
+    const result = await sandbox.process.exec({
+      command: 'find /repo -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.go" -o -name "*.java" -o -name "*.rb" -o -name "*.rs" -o -name "*.php" \\) ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" 2>/dev/null | wc -l',
+      timeout: 15000,
+    });
+
+    if (!result.stdout || parseInt(result.stdout.trim(), 10) === 0) {
+      return 'Unknown';
+    }
+
+    const counts: Record<string, number> = {};
+    for (const ext of Object.keys(langExtensions)) {
+      const countResult = await sandbox.process.exec({
+        command: `find /repo -type f -name "*${ext}" ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" 2>/dev/null | wc -l`,
+        timeout: 10000,
+      });
+      if (countResult.exitCode === 0 && countResult.stdout) {
+        counts[ext] = parseInt(countResult.stdout.trim(), 10) || 0;
+      }
+    }
+
+    let maxExt = '';
+    let maxCount = 0;
+    for (const [ext, count] of Object.entries(counts)) {
+      if (count > maxCount) {
+        maxCount = count;
+        maxExt = ext;
+      }
+    }
+
+    return langExtensions[maxExt] || 'Unknown';
+  } catch {
+    return 'Unknown';
+  }
+}
+
+/**
  * Collect analysis context from the sandbox
  * Reads the .analysis-context.json file if it exists, or generates context from repo
  */
@@ -266,7 +376,7 @@ export async function collectAnalysisContext(
     // Find entry points (common patterns)
     const entryPoints: string[] = [];
     const entryPointResult = await sandbox.process.exec({
-      command: 'find /repo -maxdepth 2 -type f \( -name "index.*" -o -name "main.*" -o -name "app.*" -o -name "server.*" \) 2>/dev/null | head -20',
+      command: 'find /repo -maxdepth 2 -type f \\( -name "index.*" -o -name "main.*" -o -name "app.*" -o -name "server.*" \\) 2>/dev/null | head -20',
       timeout: 5000,
     });
     
@@ -285,7 +395,64 @@ export async function collectAnalysisContext(
       });
       
       if (configResult.exitCode === 0 && configResult.stdout && configResult.stdout.trim()) {
-        configFiles[configFile] = { content: configResult.stdout };
+        const keyDeps = configFile === 'package.json' ? extractKeyDeps(configResult.stdout) : undefined;
+        configFiles[configFile] = { content: configResult.stdout, keyDeps };
+      }
+    }
+
+    // Extract framework from package.json
+    let framework = 'Unknown';
+    let architecture = 'Unknown';
+    if (configFiles['package.json']) {
+      framework = extractFramework(configFiles['package.json'].content);
+      // Detect architecture from structure
+      if (directories.includes('app') && directories.includes('api')) {
+        architecture = 'Next.js App Router';
+      } else if (directories.includes('pages') && directories.includes('api')) {
+        architecture = 'Next.js Pages Router';
+      } else if (directories.includes('src') && directories.includes('components')) {
+        architecture = 'SPA with Components';
+      } else if (directories.includes('routes') || directories.includes('controllers')) {
+        architecture = 'MVC Pattern';
+      }
+    }
+
+    // Extract key modules
+    const keyModules = extractKeyModules(directories);
+
+    // Detect primary language
+    const primaryLanguage = await detectPrimaryLanguage(sandbox);
+
+    // Collect metadata (lines of code, file count, test files)
+    const metadata: { linesOfCode?: number; fileCount?: number; testFiles?: string[] } = {};
+    
+    // Get total file count
+    const fileCountResult = await sandbox.process.exec({
+      command: 'find /repo -type f ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" ! -path "*/.next/*" 2>/dev/null | wc -l',
+      timeout: 30000,
+    });
+    if (fileCountResult.exitCode === 0 && fileCountResult.stdout) {
+      metadata.fileCount = parseInt(fileCountResult.stdout.trim(), 10) || 0;
+    }
+
+    // Get lines of code for common source files
+    const locResult = await sandbox.process.exec({
+      command: 'find /repo -type f \\( -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.jsx" -o -name "*.py" -o -name "*.go" \\) ! -path "*/node_modules/*" ! -path "*/.git/*" ! -path "*/dist/*" ! -path "*/build/*" ! -path "*/.next/*" 2>/dev/null -exec cat {} \\; | wc -l',
+      timeout: 30000,
+    });
+    if (locResult.exitCode === 0 && locResult.stdout) {
+      metadata.linesOfCode = parseInt(locResult.stdout.trim(), 10) || 0;
+    }
+
+    // Find test files
+    const testFilesResult = await sandbox.process.exec({
+      command: 'find /repo -type f \\( -name "*.test.ts" -o -name "*.test.tsx" -o -name "*.spec.ts" -o -name "*.spec.tsx" -o -name "*__tests__*" -o -name "*.test.js" -o -name "*.spec.js" \\) ! -path "*/node_modules/*" ! -path "*/.git/*" 2>/dev/null | head -20',
+      timeout: 15000,
+    });
+    if (testFilesResult.exitCode === 0 && testFilesResult.stdout) {
+      const testFiles = testFilesResult.stdout.split('\n').filter(Boolean);
+      if (testFiles.length > 0) {
+        metadata.testFiles = testFiles;
       }
     }
 
@@ -300,10 +467,12 @@ export async function collectAnalysisContext(
       configFiles,
       sourceFiles: [],
       patterns: {
-        framework: 'Unknown',
-        architecture: 'Unknown',
-        keyModules: [],
+        framework,
+        architecture,
+        keyModules,
+        primaryLanguage,
       },
+      metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
     };
 
     console.log('[AnalysisContext] Generated basic context');

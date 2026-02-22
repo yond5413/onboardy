@@ -231,8 +231,8 @@ async function processJob(
     let ownershipData: OwnershipData | undefined;
     try {
       console.log(`[${jobId}] Analyzing repository ownership...`);
-      ownershipData = await analyzeOwnership(githubUrl, jobId);
-      console.log(`[${jobId}] Ownership analysis complete: ${ownershipData.globalOwners.length} owners found`);
+      ownershipData = await analyzeOwnership(sandbox, reactFlowData);
+      console.log(`[${jobId}] Ownership analysis complete: ${ownershipData.globalOwners.length} global owners, ${Object.keys(ownershipData.components).length} component owners`);
     } catch (ownershipError) {
       console.error(`[${jobId}] Failed to analyze ownership:`, ownershipError);
     }

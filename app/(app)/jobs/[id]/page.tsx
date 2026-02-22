@@ -48,6 +48,7 @@ import type { ReactFlowNode, ReactFlowEdge } from '@/app/lib/types';
 import { evaluateArchitectureDiagramQuality } from '@/app/lib/diagram-quality';
 import { PodcastSettingsModal } from '@/components/podcast-settings-modal';
 import { OwnerList } from '@/components/owner-badge';
+import { NodeOwnersPanel } from '@/components/node-owners-panel';
 import {
   Dialog,
   DialogContent,
@@ -75,7 +76,25 @@ interface JobData {
       lastCommitDate: string;
       commitCount: number;
       recentCommitCount: number;
+      filesModified?: string[];
     }>;
+    components: {
+      [componentId: string]: {
+        componentId: string;
+        componentLabel: string;
+        owners: Array<{
+          name: string;
+          email: string;
+          confidence: number;
+          reasons: string[];
+          lastCommitDate: string;
+          commitCount: number;
+          recentCommitCount: number;
+          filesModified?: string[];
+        }>;
+        keyFiles: string[];
+      };
+    };
   };
   error?: string;
   created_at: string;
@@ -350,6 +369,13 @@ export default function JobDetailPage() {
   };
 
   const handleActionSelect = (action: string, graphContext: GraphContext) => {
+    if (action === 'owners') {
+      // For "Who owns this" action, just close the menu and stay on architecture tab
+      // The NodeOwnersPanel will be shown when a node is selected
+      setNodeActionsPosition(null);
+      setSelectedNode(null);
+      return;
+    }
     setChatInitialMessage(action);
     setChatGraphContext(graphContext);
     setPendingPrompt(action);
@@ -728,17 +754,24 @@ export default function JobDetailPage() {
                             />
                           )}
                           {selectedArchitectureNode && (
-                            <div className="absolute bottom-4 left-4 bg-background/95 border rounded-lg p-3 shadow-lg">
-                              <p className="text-sm text-muted-foreground mb-2">
-                                Selected: <span className="font-medium text-foreground">{String(selectedArchitectureNode.data?.label || selectedArchitectureNode.id)}</span>
-                              </p>
-                              <div className="flex flex-wrap gap-2">
-                                <Button size="sm" variant="outline" onClick={() => startGraphContextChat('explain')}>Explain</Button>
-                                <Button size="sm" variant="outline" onClick={() => startGraphContextChat('trace')}>Trace Flow</Button>
-                                <Button size="sm" variant="outline" onClick={() => startGraphContextChat('debug')}>Debug</Button>
-                                <Button size="sm" variant="outline" onClick={() => startGraphContextChat('files')}>Files</Button>
+                            <>
+                              <NodeOwnersPanel
+                                componentOwnership={job.ownership_data?.components?.[selectedArchitectureNode.id]}
+                                globalOwners={job.ownership_data?.globalOwners || []}
+                                onClose={() => setSelectedArchitectureNode(null)}
+                              />
+                              <div className="absolute bottom-4 left-4 bg-background/95 border rounded-lg p-3 shadow-lg">
+                                <p className="text-sm text-muted-foreground mb-2">
+                                  Selected: <span className="font-medium text-foreground">{String(selectedArchitectureNode.data?.label || selectedArchitectureNode.id)}</span>
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                  <Button size="sm" variant="outline" onClick={() => startGraphContextChat('explain')}>Explain</Button>
+                                  <Button size="sm" variant="outline" onClick={() => startGraphContextChat('trace')}>Trace Flow</Button>
+                                  <Button size="sm" variant="outline" onClick={() => startGraphContextChat('debug')}>Debug</Button>
+                                  <Button size="sm" variant="outline" onClick={() => startGraphContextChat('files')}>Files</Button>
+                                </div>
                               </div>
-                            </div>
+                            </>
                           )}
                         </div>
                       ) : job.markdown_content?.includes('```mermaid') ? (

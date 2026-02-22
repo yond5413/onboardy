@@ -3,8 +3,8 @@
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Badge } from '@/components/ui/badge';
-import type { OwnerInfo } from '@/app/lib/agent';
-import { User, Mail, Calendar, GitCommit } from 'lucide-react';
+import type { OwnerInfo, ComponentOwnership } from '@/app/lib/agent';
+import { User, Mail, Calendar, GitCommit, FolderOpen } from 'lucide-react';
 
 interface OwnerBadgeProps {
   owner: OwnerInfo;
@@ -91,6 +91,23 @@ export function OwnerBadge({ owner, showEmail = false, size = 'md' }: OwnerBadge
                 ))}
               </ul>
             </div>
+
+            {owner.filesModified && owner.filesModified.length > 0 && (
+              <div className="border-t pt-2 mt-2">
+                <div className="flex items-center gap-1 text-xs font-medium mb-1">
+                  <FolderOpen className="h-3 w-3" />
+                  <span>Files modified</span>
+                </div>
+                <div className="text-xs text-muted-foreground font-mono max-h-16 overflow-y-auto">
+                  {owner.filesModified.slice(0, 5).map((file, i) => (
+                    <div key={i} className="truncate">{file}</div>
+                  ))}
+                  {owner.filesModified.length > 5 && (
+                    <div className="text-xs text-muted-foreground">+{owner.filesModified.length - 5} more</div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </TooltipContent>
       </Tooltip>

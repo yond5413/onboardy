@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useEffect } from 'react';
-import { MessageSquare, GitBranch, FileCode, Bug, X } from 'lucide-react';
+import { MessageSquare, GitBranch, FileCode, Bug, X, Users } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type { DiagramNodeData } from './ArchitectureDiagram';
 import type { GraphContext } from '@/app/lib/types';
@@ -50,6 +50,12 @@ const actions = [
     label: 'Debug this', 
     prompt: 'How would I debug issues in this component?',
     icon: Bug 
+  },
+  { 
+    id: 'owners', 
+    label: 'Who owns this', 
+    prompt: 'Who can I ask about this component?',
+    icon: Users 
   },
 ];
 

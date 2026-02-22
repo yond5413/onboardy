@@ -58,6 +58,7 @@ export interface CodePatterns {
   framework: string;
   architecture: string;
   keyModules: string[];
+  primaryLanguage?: string;
 }
 
 // Metadata about the repository
