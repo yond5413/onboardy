@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/app/lib/supabase/server';
 import { jobStore } from '@/app/lib/jobs';
-import { createAnalysisSandbox, pauseSandbox, cloneRepoToSandbox, collectAnalysisContext } from '@/app/lib/blaxel';
+import { createAnalysisSandbox, pauseSandbox, cloneRepoToSandbox, collectAnalysisContext, ensureRepoPresent } from '@/app/lib/blaxel';
 import type { SandboxInstance } from '@blaxel/core';
 import { analyzeRepoWithAgent, generateDiagramWithAgent, analyzeOwnership, type OwnershipData, type DiagramResult } from '@/app/lib/agent';
 import { generateTTS } from '@/app/lib/elevenlabs';
@@ -10,6 +10,35 @@ import { exportAnalysisOutputs, type ExportPaths } from '@/app/lib/storage/expor
 import { emitJobEvent } from '@/app/lib/job-events';
 import { extractLayeredMarkdown } from '@/app/lib/markdown-extractor';
 import type { AnalysisJob, AnalysisContext, ReactFlowData } from '@/app/lib/types';
+
+function startSandboxKeepAlive(
+  sandbox: SandboxInstance,
+  intervalMs: number = 15000
+): { stop: () => void } {
+  let stopped = false;
+  let inFlight = false;
+
+  const timer = setInterval(async () => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    try {
+      // Use the filesystem HTTP API to keep sandbox warm -- this is the same
+      // reliable API that agents use, unlike process.exec which can return empty.
+      await sandbox.fs.ls('/');
+    } catch {
+      // Ignore keep-alive errors; standby can happen anyway and we'll re-clone if needed
+    } finally {
+      inFlight = false;
+    }
+  }, intervalMs);
+
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
+}
 
 function generateId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -147,6 +176,7 @@ async function processJob(
 ): Promise<void> {
   const supabase = await createClient();
   let sandbox: SandboxInstance | null = null;
+  let keepAlive: { stop: () => void } | null = null;
 
   try {
     // Update status to processing
@@ -171,6 +201,12 @@ async function processJob(
     // Update status to analyzing
     await supabase.from('jobs').update({ status: 'analyzing' }).eq('id', jobId);
     jobStore.update(jobId, { status: 'analyzing' });
+
+    // Start keep-alive once repo is cloned (best effort)
+    keepAlive = startSandboxKeepAlive(sandbox);
+
+    // Ensure repo still exists (sandboxes may scale-to-zero on idle)
+    await ensureRepoPresent(sandbox, githubUrl);
 
     // Step 1: Generate markdown
     const result = await analyzeRepoWithAgent(
@@ -199,6 +235,7 @@ async function processJob(
     let diagramResult: DiagramResult | undefined;
     let reactFlowData: ReactFlowData | undefined;
     try {
+      await ensureRepoPresent(sandbox, githubUrl);
       diagramResult = await generateDiagramWithAgent(
         sandbox,
         jobId,
@@ -219,6 +256,7 @@ async function processJob(
     // Collect analysis context
     let analysisContext: AnalysisContext | undefined;
     try {
+      await ensureRepoPresent(sandbox, githubUrl);
       analysisContext = await collectAnalysisContext(sandbox, githubUrl);
       if (analysisContext) {
         console.log(`[${jobId}] Collected analysis context`);
@@ -230,6 +268,7 @@ async function processJob(
     // Step 3: Analyze ownership
     let ownershipData: OwnershipData | undefined;
     try {
+      await ensureRepoPresent(sandbox, githubUrl);
       console.log(`[${jobId}] Analyzing repository ownership...`);
       ownershipData = await analyzeOwnership(sandbox, reactFlowData);
       console.log(`[${jobId}] Ownership analysis complete: ${ownershipData.globalOwners.length} global owners, ${Object.keys(ownershipData.components).length} component owners`);
@@ -311,6 +350,9 @@ async function processJob(
 
     emitJobEvent(jobId, 'error', errorMessage);
   } finally {
+    if (keepAlive) {
+      keepAlive.stop();
+    }
     if (sandbox) {
       try {
         await pauseSandbox(sandbox);
