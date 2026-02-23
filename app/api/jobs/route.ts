@@ -351,6 +351,7 @@ async function processJob(
       results.markdown = cleanMarkdown(result.markdown);
       results.analysisMetrics = result.metrics;
       results.layeredMarkdown = extractLayeredMarkdown(results.markdown);
+
       
       console.log(`[${jobId}] Analysis complete, markdown: ${results.markdown.length} chars`);
       await completeStage('analysis', analysisStartTime);

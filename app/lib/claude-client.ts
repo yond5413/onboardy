@@ -63,6 +63,21 @@ interface MCPTool {
   inputSchema?: Record<string, unknown>;
 }
 
+interface MCPContentText {
+  type?: string;
+  text?: string;
+}
+
+interface JSONRPCError {
+  message?: string;
+}
+
+interface JSONRPCResponse {
+  id?: number;
+  result?: Record<string, unknown>;
+  error?: JSONRPCError;
+}
+
 class MCPClient {
   private url: string;
   private headers: Record<string, string>;
@@ -99,9 +114,16 @@ class MCPClient {
     });
 
     if (result?.content && Array.isArray(result.content)) {
-      return result.content
-        .map((c: { type?: string; text?: string }) => c.text ?? '')
+      const renderedContent = (result.content as MCPContentText[])
+        .map((contentItem) => {
+          if (typeof contentItem?.text === 'string') {
+            return contentItem.text;
+          }
+          return JSON.stringify(contentItem);
+        })
         .join('\n');
+
+      return renderedContent;
     }
 
     return typeof result === 'string' ? result : JSON.stringify(result);
@@ -119,6 +141,7 @@ class MCPClient {
       Accept: 'application/json, text/event-stream',
       ...this.headers,
     };
+
     if (this.sessionId) {
       reqHeaders['mcp-session-id'] = this.sessionId;
     }
@@ -130,7 +153,13 @@ class MCPClient {
     });
 
     const sid = res.headers.get('mcp-session-id');
-    if (sid) this.sessionId = sid;
+    if (sid) {
+      this.sessionId = sid;
+    }
+
+    if (!res.ok) {
+      throw new Error(`MCP ${method} HTTP ${res.status}: ${res.statusText}`);
+    }
 
     const contentType = res.headers.get('content-type') ?? '';
 
@@ -138,12 +167,13 @@ class MCPClient {
       return this.parseSSE(await res.text(), id);
     }
 
-    const data = await res.json();
+    const data = (await res.json()) as JSONRPCResponse;
     if (data.error) {
       throw new Error(
         `MCP ${method} error: ${data.error.message ?? JSON.stringify(data.error)}`,
       );
     }
+
     return data.result ?? {};
   }
 
@@ -155,6 +185,7 @@ class MCPClient {
       'Content-Type': 'application/json',
       ...this.headers,
     };
+
     if (this.sessionId) {
       reqHeaders['mcp-session-id'] = this.sessionId;
     }
@@ -174,23 +205,41 @@ class MCPClient {
     body: string,
     expectedId: number,
   ): Record<string, unknown> {
-    const lines = body.split('\n');
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
+    const events = body.split('\n\n');
+
+    for (const eventBlock of events) {
+      const dataLines = eventBlock
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart());
+
+      if (dataLines.length === 0) {
+        continue;
+      }
+
+      const payload = dataLines.join('\n');
+      if (!payload || payload === '[DONE]') {
+        continue;
+      }
+
       try {
-        const json = JSON.parse(line.slice(6));
-        if (json.id === expectedId) {
-          if (json.error) {
-            throw new Error(
-              `MCP error: ${json.error.message ?? JSON.stringify(json.error)}`,
-            );
-          }
-          return json.result ?? {};
+        const json = JSON.parse(payload) as JSONRPCResponse;
+        if (json.id !== expectedId) {
+          continue;
         }
-        } catch {
-          // skip malformed lines
+
+        if (json.error) {
+          throw new Error(
+            `MCP error: ${json.error.message ?? JSON.stringify(json.error)}`,
+          );
         }
+
+        return json.result ?? {};
+      } catch {
+        // Skip malformed SSE event payloads.
+      }
     }
+
     return {};
   }
 }
@@ -202,6 +251,7 @@ export async function* query(input: QueryInput): AsyncGenerator<AgentMessage> {
     string,
     { client: MCPClient; toolMap: Map<string, string> }
   >();
+
   let allTools: Anthropic.Tool[] = [];
 
   if (input.options.mcpServers) {
@@ -211,22 +261,24 @@ export async function* query(input: QueryInput): AsyncGenerator<AgentMessage> {
         await client.initialize();
 
         const mcpTools = await client.listTools();
-
         const toolMap = new Map<string, string>();
+
         for (const tool of mcpTools) {
-          const prefixed = `mcp__${serverName}__${tool.name}`;
-          toolMap.set(prefixed, tool.name);
+          const prefixedToolName = `mcp__${serverName}__${tool.name}`;
+          toolMap.set(prefixedToolName, tool.name);
 
           allTools.push({
-            name: prefixed,
+            name: prefixedToolName,
             description: tool.description ?? '',
-            input_schema: (tool.inputSchema ?? { type: 'object' }) as Anthropic.Tool.InputSchema,
+            input_schema: (tool.inputSchema ?? {
+              type: 'object',
+            }) as Anthropic.Tool.InputSchema,
           });
         }
 
         mcpClients.set(serverName, { client, toolMap });
         console.log(
-          `[ClaudeClient] Connected to MCP server "${serverName}" – ${mcpTools.length} tools`,
+          `[ClaudeClient] Connected to MCP server "${serverName}" - ${mcpTools.length} tools`,
         );
       } catch (error) {
         console.error(
@@ -237,9 +289,23 @@ export async function* query(input: QueryInput): AsyncGenerator<AgentMessage> {
     }
   }
 
+  if (Array.isArray(input.options.tools) && input.options.tools.length > 0) {
+    allTools = allTools.concat(input.options.tools as Anthropic.Tool[]);
+  }
+
   if (input.options.allowedTools && input.options.allowedTools.length > 0) {
     const allowed = new Set(input.options.allowedTools);
-    allTools = allTools.filter((t) => allowed.has(t.name));
+    allTools = allTools.filter((tool) => allowed.has(tool.name));
+  }
+
+  if (
+    input.options.permissionMode &&
+    input.options.permissionMode !== 'bypassPermissions' &&
+    !input.options.allowDangerouslySkipPermissions
+  ) {
+    console.warn(
+      `[ClaudeClient] permissionMode="${input.options.permissionMode}" requested; serverless client currently executes tools without interactive approval gates.`,
+    );
   }
 
   const messages: Anthropic.MessageParam[] = [
@@ -249,7 +315,7 @@ export async function* query(input: QueryInput): AsyncGenerator<AgentMessage> {
   const maxTurns = input.options.maxTurns ?? 30;
 
   try {
-    for (let turn = 0; turn < maxTurns; turn++) {
+    for (let turn = 0; turn < maxTurns; turn += 1) {
       const response = await anthropic.messages.create({
         model: input.options.model,
         messages,
@@ -262,59 +328,65 @@ export async function* query(input: QueryInput): AsyncGenerator<AgentMessage> {
 
       const contentBlocks: ContentBlock[] = response.content.map((block) => {
         if (block.type === 'text') {
-          return { text: block.text } as TextBlock;
+          return { text: block.text };
         }
+
         if (block.type === 'tool_use') {
           return {
             name: block.name,
             id: block.id,
             input: block.input as Record<string, unknown>,
-          } as ToolUseBlock;
+          };
         }
-        return { text: '' } as TextBlock;
+
+        return { text: '' };
       });
 
       yield {
-        type: 'assistant' as const,
+        type: 'assistant',
         message: { content: contentBlocks },
       };
 
       if (response.stop_reason !== 'tool_use') {
         const finalText = response.content
-          .filter(
-            (b): b is Anthropic.TextBlock => b.type === 'text',
-          )
-          .map((b: Anthropic.TextBlock) => b.text)
+          .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+          .map((block) => block.text)
           .join('');
 
         yield {
-          type: 'result' as const,
-          subtype: 'success' as const,
+          type: 'result',
+          subtype: 'success',
           result: finalText,
         };
+
         return;
       }
 
       const toolResults: Anthropic.ToolResultBlockParam[] = [];
 
       for (const block of response.content) {
-        if (block.type !== 'tool_use') continue;
+        if (block.type !== 'tool_use') {
+          continue;
+        }
 
         let content = `Tool "${block.name}" not found in any MCP server`;
 
         for (const [, { client, toolMap }] of mcpClients) {
-          const originalName = toolMap.get(block.name);
-          if (originalName) {
-            try {
-              content = await client.callTool(
-                originalName,
-                block.input as Record<string, unknown>,
-              );
-            } catch (err) {
-              content = `Error: ${err instanceof Error ? err.message : String(err)}`;
-            }
-            break;
+          const originalToolName = toolMap.get(block.name);
+          if (!originalToolName) {
+            continue;
           }
+
+          try {
+            content = await client.callTool(
+              originalToolName,
+              block.input as Record<string, unknown>,
+            );
+          } catch (error) {
+            content = `Error: ${error instanceof Error ? error.message : String(error)}`;
+          }
+
+          break;
         }
 
         toolResults.push({
@@ -324,14 +396,24 @@ export async function* query(input: QueryInput): AsyncGenerator<AgentMessage> {
         });
       }
 
+      if (toolResults.length === 0) {
+        yield {
+          type: 'result',
+          subtype: 'success',
+          result: '',
+        };
+
+        return;
+      }
+
       messages.push({ role: 'assistant', content: response.content });
       messages.push({ role: 'user', content: toolResults });
     }
 
     console.warn(`[ClaudeClient] Reached max turns (${maxTurns})`);
     yield {
-      type: 'result' as const,
-      subtype: 'success' as const,
+      type: 'result',
+      subtype: 'success',
       result: '',
     };
   } finally {
