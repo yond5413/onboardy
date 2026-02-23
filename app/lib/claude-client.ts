@@ -307,7 +307,16 @@ async function createMessageWithRetry(
     attempt += 1;
 
     try {
-      return await anthropic.messages.create(params);
+      const response = await anthropic.messages.create({
+        ...params,
+        stream: false,
+      });
+
+      if (!('content' in response)) {
+        throw new Error('Streaming Anthropic responses are not supported in claude-client query().');
+      }
+
+      return response;
     } catch (error) {
       const shouldRetry =
         attempt <= MAX_ANTHROPIC_RETRIES && isRetryableAnthropicError(error);
