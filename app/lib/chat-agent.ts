@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from './claude-client';
 import type { SandboxInstance } from '@blaxel/core';
 
 const HAIKU_MODEL = 'claude-haiku-4-5';

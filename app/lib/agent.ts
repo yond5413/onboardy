@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from './claude-client';
 import type { SandboxInstance } from '@blaxel/core';
 import { readFile } from 'fs/promises';
 import path from 'path';
@@ -816,15 +816,6 @@ export async function analyzeRepoIterative(
         } else if (resultText.includes('/repo/technical-spec.md')) {
           technicalContent = resultText;
         }
-      }
-    } else if (message.type === 'system') {
-      const sysMsg = message as { subtype?: string; output?: { path?: string; content?: string } };
-      if (sysMsg.output?.path === '/repo/.analysis-notes.md') {
-        notesContent = sysMsg.output.content || '';
-      } else if (sysMsg.output?.path === '/repo/system-design.md') {
-        highlevelContent = sysMsg.output.content || '';
-      } else if (sysMsg.output?.path === '/repo/technical-spec.md') {
-        technicalContent = sysMsg.output.content || '';
       }
     }
   }

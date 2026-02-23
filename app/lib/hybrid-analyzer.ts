@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from './claude-client';
 import type { SandboxInstance } from '@blaxel/core';
 import { readFileSync } from 'fs';
 import { join } from 'path';
