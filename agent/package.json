@@ -10,7 +10,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.42",
     "@blaxel/core": "^0.2.65",
-    "@blaxel/telemetry": "^0.1.0",
+    "@blaxel/telemetry": "^0.2.65",
     "express": "^4.18.2"
   },
   "devDependencies": {
