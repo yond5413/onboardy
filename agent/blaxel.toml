@@ -1,4 +1,5 @@
 name = "onboardy-analyzer"
+workspace = "columbia-158966"
 type = "agent"
 public = false
 
