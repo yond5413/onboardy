@@ -13,8 +13,48 @@ app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
+const REQUIRED_ENV_VARS = [
+  "BL_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "SUPABASE_URL",
+  "SUPABASE_SERVICE_ROLE_KEY",
+] as const;
+
+app.get("/env", (_req: Request, res: Response) => {
+  const variables: Record<string, { set: boolean }> = {};
+  let allSet = true;
+
+  for (const varName of REQUIRED_ENV_VARS) {
+    const isSet = !!process.env[varName];
+    variables[varName] = { set: isSet };
+    if (!isSet) allSet = false;
+  }
+
+  res.json({
+    status: allSet ? "ok" : "missing",
+    variables,
+  });
+});
+
+// Fallback middleware: if Blaxel strips the sub-path, rewrite URL based on body.action
+app.use((req: Request, _res: Response, next: express.NextFunction) => {
+  if (req.method === 'POST' && req.path === '/' && req.body?.action) {
+    const action = req.body.action as string;
+    if (['analyze', 'diagram', 'chat'].includes(action)) {
+      console.log(`[Router] Rewriting POST / with action=${action} to /${action}`);
+      req.url = `/${action}`;
+    }
+  }
+  next();
+});
+
 app.post("/analyze", async (req: Request, res: Response) => {
   const { sandboxName, prompt, systemPrompt, model, jobId } = req.body;
+  const apiKey = req.headers['x-anthropic-key'] as string || process.env.ANTHROPIC_API_KEY;
+
+  console.log('[Analyze] API key from header:', apiKey ? `YES (${apiKey.substring(0, 8)}...)` : 'NO');
+  console.log('[Analyze] Sandbox:', sandboxName);
+  console.log('[Analyze] JobId:', jobId);
 
   if (!sandboxName || !prompt) {
     return res.status(400).json({ error: "sandboxName and prompt are required" });
@@ -32,6 +72,7 @@ app.post("/analyze", async (req: Request, res: Response) => {
       systemPrompt: systemPrompt || SYSTEM_PROMPT,
       model: model || "claude-haiku-4-5",
       jobId: jobId || "unknown",
+      apiKey,
     })) {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     }
@@ -46,6 +87,7 @@ app.post("/analyze", async (req: Request, res: Response) => {
 
 app.post("/diagram", async (req: Request, res: Response) => {
   const { sandboxName, prompt, systemPrompt, model, jobId } = req.body;
+  const apiKey = req.headers['x-anthropic-key'] as string || process.env.ANTHROPIC_API_KEY;
 
   if (!sandboxName || !prompt) {
     return res.status(400).json({ error: "sandboxName and prompt are required" });
@@ -62,6 +104,7 @@ app.post("/diagram", async (req: Request, res: Response) => {
       systemPrompt: systemPrompt || SYSTEM_PROMPT,
       model: model || "claude-haiku-4-5",
       jobId: jobId || "unknown",
+      apiKey,
     })) {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     }
@@ -76,6 +119,7 @@ app.post("/diagram", async (req: Request, res: Response) => {
 
 app.post("/chat", async (req: Request, res: Response) => {
   const { sandboxName, messages, systemPrompt, model, context, graphContext } = req.body;
+  const apiKey = req.headers['x-anthropic-key'] as string || process.env.ANTHROPIC_API_KEY;
 
   if (!sandboxName || !messages) {
     return res.status(400).json({ error: "sandboxName and messages are required" });
@@ -93,6 +137,7 @@ app.post("/chat", async (req: Request, res: Response) => {
       model: model || "claude-haiku-4-5",
       context,
       graphContext,
+      apiKey,
     })) {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     }

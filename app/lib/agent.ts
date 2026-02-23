@@ -12,9 +12,9 @@ import {
 import { JobEvents } from './job-events';
 
 const BLAXEL_WORKSPACE = process.env.BLAXEL_WORKSPACE || process.env.BL_WORKSPACE;
-const BLAXEL_AGENT_URL = BLAXEL_WORKSPACE 
-  ? `https://run.blaxel.ai/${BLAXEL_WORKSPACE}/agents/onboardy-analyzer`
-  : null;
+const BLAXEL_AGENT_NAME = process.env.BLAXEL_AGENT_NAME || 'onboardy-analyzer';
+const BLAXEL_AGENT_URL = process.env.BLAXEL_AGENT_URL || process.env.BL_AGENT_URL
+  || (BLAXEL_WORKSPACE ? `https://run.blaxel.ai/${BLAXEL_WORKSPACE}/agents/${BLAXEL_AGENT_NAME}` : null);
 
 export interface OwnerInfo {
   name: string;
@@ -545,11 +545,15 @@ async function callBlaxelAgent(
     throw new Error('BLAXEL_WORKSPACE or BL_WORKSPACE environment variable is required');
   }
 
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+
   const response = await fetch(`${BLAXEL_AGENT_URL}/${endpoint}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
+      'X-Blaxel-Authorization': `Bearer ${apiKey}`,
+      'X-Blaxel-Workspace': BLAXEL_WORKSPACE || '',
+      'X-Anthropic-Key': anthropicKey || '',
     },
     body: JSON.stringify(body),
   });
@@ -567,15 +571,21 @@ async function callBlaxelAgent(
   const decoder = new TextDecoder();
   let finalResult: { markdown?: string; highlevel?: string; technical?: string; rawOutput?: string } = {};
   let rawOutput = '';
+  let sseBuffer = '';
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    const text = decoder.decode(value);
-    const lines = text.split('\n').filter(l => l.startsWith('data: '));
+    // Accumulate chunks to handle TCP boundaries correctly
+    sseBuffer += decoder.decode(value, { stream: true });
 
-    for (const line of lines) {
+    // Split on newlines, but keep the last (possibly incomplete) part in the buffer
+    const parts = sseBuffer.split('\n');
+    sseBuffer = parts.pop() || '';
+
+    for (const line of parts) {
+      if (!line.startsWith('data: ')) continue;
       try {
         const event = JSON.parse(line.slice(6));
 
@@ -597,9 +607,26 @@ async function callBlaxelAgent(
         } else if (event.type === 'error') {
           throw new Error(`Agent error: ${event.error}`);
         }
-      } catch {
-        // Skip non-JSON lines
+      } catch (e) {
+        // Skip non-JSON lines, but log unexpected parse failures
+        if (line.startsWith('data: ') && line.length > 6) {
+          console.warn('[SSE] Failed to parse event line:', line.substring(0, 100), e);
+        }
       }
+    }
+  }
+
+  // Process any remaining data in the buffer after stream ends
+  if (sseBuffer.trim().startsWith('data: ')) {
+    try {
+      const event = JSON.parse(sseBuffer.trim().slice(6));
+      if (event.type === 'text') {
+        rawOutput += event.text;
+      } else if (event.type === 'complete') {
+        finalResult = event;
+      }
+    } catch {
+      // Final buffer was incomplete, ignore
     }
   }
 
@@ -699,6 +726,12 @@ export async function generateDiagramWithAgent(
     onProgress
   );
 
+  // Guard against empty output before attempting JSON parse
+  if (!result.rawOutput || result.rawOutput.trim().length === 0) {
+    console.error('[Diagram] Agent returned empty output - analysis may not have completed');
+    throw new Error('Diagram agent returned empty output - the agent may not have produced results');
+  }
+
   // The diagram result is different - parse it
   let diagramData: DiagramResult;
   try {
@@ -711,7 +744,8 @@ export async function generateDiagramWithAgent(
     }
   } catch (parseError) {
     console.error('[Diagram] Failed to parse JSON:', parseError);
-    console.log('[Diagram] Raw response:', result.rawOutput.substring(0, 500));
+    console.log('[Diagram] Raw response length:', result.rawOutput.length);
+    console.log('[Diagram] Raw response preview:', result.rawOutput.substring(0, 500));
     throw new Error('Failed to generate diagram data - invalid JSON response');
   }
 
@@ -1048,4 +1082,156 @@ export async function analyzeOwnership(
     globalOwners,
   };
 }
+
+export interface JobProgressStatus {
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  progressMessage?: string;
+  percentComplete?: number;
+  currentStage?: string;
+  resultData?: {
+    highlevel?: string;
+    technical?: string;
+    hasMarkdown?: boolean;
+  };
+  errorMessage?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface JobEventData {
+  id: string;
+  jobId: string;
+  eventType: string;
+  message: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+async function getSupabaseClient() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    throw new Error('Missing Supabase configuration');
+  }
+  const { createClient } = await import('@supabase/supabase-js');
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+}
+
+export async function startAnalysisJob(
+  sandbox: SandboxInstance,
+  jobId: string,
+  prompt: string,
+  systemPrompt: string,
+  model: string
+): Promise<{ success: boolean; error?: string }> {
+  const apiKey = process.env.BL_API_KEY;
+  
+  if (!apiKey) {
+    return { success: false, error: 'BL_API_KEY is required' };
+  }
+
+  if (!BLAXEL_AGENT_URL) {
+    return { success: false, error: 'BLAXEL_WORKSPACE is required' };
+  }
+
+  const sandboxName = (sandbox as unknown as { name?: string }).name || sandbox.metadata?.name;
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+
+  try {
+    const response = await fetch(`${BLAXEL_AGENT_URL}/analyze`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Blaxel-Authorization': `Bearer ${apiKey}`,
+        'X-Blaxel-Workspace': BLAXEL_WORKSPACE || '',
+        'X-Anthropic-Key': anthropicKey || '',
+      },
+      body: JSON.stringify({
+        sandboxName,
+        prompt,
+        systemPrompt,
+        model,
+        jobId,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return { success: false, error: `Agent failed: ${response.status} - ${errorText}` };
+    }
+
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error starting job'
+    };
+  }
+}
+
+export async function pollJobProgress(jobId: string): Promise<JobProgressStatus | null> {
+  try {
+    const supabase = await getSupabaseClient();
+    
+    const { data, error } = await supabase
+      .from('job_progress')
+      .select('*')
+      .eq('job_id', jobId)
+      .single();
+
+    if (error || !data) {
+      return null;
+    }
+
+    return {
+      status: data.status,
+      progressMessage: data.progress_message,
+      percentComplete: data.percent_complete,
+      currentStage: data.current_stage,
+      resultData: data.result_data,
+      errorMessage: data.error_message,
+      startedAt: data.started_at,
+      completedAt: data.completed_at,
+    };
+  } catch (error) {
+    console.error('[pollJobProgress] Error:', error);
+    return null;
+  }
+}
+
+export async function pollJobEvents(jobId: string, since?: string): Promise<JobEventData[]> {
+  try {
+    const supabase = await getSupabaseClient();
+    
+    let query = supabase
+      .from('job_events')
+      .select('*')
+      .eq('job_id', jobId)
+      .order('created_at', { ascending: true });
+
+    if (since) {
+      query = query.gt('created_at', since);
+    }
+
+    const { data, error } = await query;
+
+    if (error || !data) {
+      return [];
+    }
+
+    return data.map(row => ({
+      id: row.id,
+      jobId: row.job_id,
+      eventType: row.event_type,
+      message: row.message,
+      metadata: row.metadata,
+      createdAt: row.created_at,
+    }));
+  } catch (error) {
+    console.error('[pollJobEvents] Error:', error);
+    return [];
+  }
+}
+
   

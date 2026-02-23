@@ -104,9 +104,9 @@ export class ChatAgentError extends Error {
 }
 
 const BLAXEL_WORKSPACE = process.env.BLAXEL_WORKSPACE || process.env.BL_WORKSPACE;
-const BLAXEL_AGENT_URL = BLAXEL_WORKSPACE 
-  ? `https://run.blaxel.ai/${BLAXEL_WORKSPACE}/agents/onboardy-analyzer`
-  : null;
+const BLAXEL_AGENT_NAME = process.env.BLAXEL_AGENT_NAME || 'onboardy-analyzer';
+const BLAXEL_AGENT_URL = process.env.BLAXEL_AGENT_URL || process.env.BL_AGENT_URL
+  || (BLAXEL_WORKSPACE ? `https://run.blaxel.ai/${BLAXEL_WORKSPACE}/agents/${BLAXEL_AGENT_NAME}` : null);
 
 export async function chatWithAgent(
   sandbox: SandboxInstance | null | undefined,
@@ -146,11 +146,15 @@ export async function chatWithAgent(
     { role: 'user', content: question }
   ];
 
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+
   const response = await fetch(`${BLAXEL_AGENT_URL}/chat`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
+      'X-Blaxel-Authorization': `Bearer ${apiKey}`,
+      'X-Blaxel-Workspace': BLAXEL_WORKSPACE || '',
+      'X-Anthropic-Key': anthropicKey || '',
     },
     body: JSON.stringify({
       sandboxName,

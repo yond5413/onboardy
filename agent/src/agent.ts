@@ -1,11 +1,13 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SandboxInstance } from "@blaxel/core";
+import { emitJobEvent, updateJobProgress } from "./supabase.js";
 
 export interface AnalyzeOptions {
   prompt: string;
   systemPrompt: string;
   model: string;
   jobId: string;
+  apiKey?: string;
 }
 
 export interface DiagramOptions {
@@ -13,6 +15,7 @@ export interface DiagramOptions {
   systemPrompt: string;
   model: string;
   jobId: string;
+  apiKey?: string;
 }
 
 export interface ChatOptions {
@@ -20,6 +23,7 @@ export interface ChatOptions {
   systemPrompt?: string;
   model: string;
   context?: string;
+  apiKey?: string;
   graphContext?: {
     nodeId?: string;
     nodeLabel?: string;
@@ -56,14 +60,35 @@ export async function* analyzeRepo(
   sandbox: SandboxInstance,
   options: AnalyzeOptions
 ): AsyncGenerator<Record<string, unknown>> {
+  // Set env var from header for SDK to use
+  if (options.apiKey) {
+    process.env.ANTHROPIC_API_KEY = options.apiKey;
+  }
+  
   const mcpUrl = `${sandbox.metadata?.url}/mcp`;
-  const apiKey = process.env.BL_API_KEY;
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = options.apiKey || process.env.BL_API_KEY;
+  const jobId = options.jobId;
+  
+  await updateJobProgress({
+    job_id: jobId,
+    status: 'running',
+    progress_message: 'Starting analysis...',
+    percent_complete: 0,
+    current_stage: 'analysis',
+    started_at: new Date().toISOString(),
+  });
+
+  await emitJobEvent({
+    job_id: jobId,
+    event_type: 'started',
+    message: 'Analysis started',
+  });
   
   let notesContent = '';
   let highlevelContent = '';
   let technicalContent = '';
   let rawOutput = '';
+  let progress = 0;
 
   try {
     for await (const message of query({
@@ -92,8 +117,23 @@ export async function* analyzeRepo(
           if ('text' in block) {
             rawOutput += block.text;
             yield { type: 'text', text: block.text.substring(0, 150) };
+            
+            progress += 2;
+            if (progress > 90) progress = 90;
+            await updateJobProgress({
+              job_id: jobId,
+              status: 'running',
+              progress_message: 'Analyzing code...',
+              percent_complete: progress,
+              current_stage: 'analysis',
+            });
           } else if ('name' in block) {
             yield { type: 'tool', name: block.name };
+            await emitJobEvent({
+              job_id: jobId,
+              event_type: 'tool_use',
+              message: `Using tool: ${block.name}`,
+            });
           }
         }
       } 
@@ -114,6 +154,13 @@ export async function* analyzeRepo(
         } else if (sysMsg.output?.path === '/repo/system-design.md') {
           highlevelContent = sysMsg.output.content || '';
           yield { type: 'highlevel', length: highlevelContent.length };
+          await updateJobProgress({
+            job_id: jobId,
+            status: 'running',
+            progress_message: 'Generated system design',
+            percent_complete: 95,
+            current_stage: 'system-design',
+          });
         } else if (sysMsg.output?.path === '/repo/technical-spec.md') {
           technicalContent = sysMsg.output.content || '';
           yield { type: 'technical', length: technicalContent.length };
@@ -128,11 +175,46 @@ export async function* analyzeRepo(
       technical: technicalContent,
       rawOutput,
     };
+
+    await updateJobProgress({
+      job_id: jobId,
+      status: 'completed',
+      progress_message: 'Analysis complete',
+      percent_complete: 100,
+      current_stage: 'complete',
+      result_data: {
+        highlevel: highlevelContent,
+        technical: technicalContent,
+        hasMarkdown: !!(highlevelContent || technicalContent),
+      },
+      completed_at: new Date().toISOString(),
+    });
+
+    await emitJobEvent({
+      job_id: jobId,
+      event_type: 'complete',
+      message: 'Analysis completed successfully',
+      metadata: { hasHighlevel: !!highlevelContent, hasTechnical: !!technicalContent },
+    });
   } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
     yield {
       type: 'error',
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMsg,
     };
+
+    await updateJobProgress({
+      job_id: jobId,
+      status: 'failed',
+      error_message: errorMsg,
+      completed_at: new Date().toISOString(),
+    });
+
+    await emitJobEvent({
+      job_id: jobId,
+      event_type: 'error',
+      message: `Analysis failed: ${errorMsg}`,
+    });
   }
 }
 
@@ -140,8 +222,13 @@ export async function* generateDiagram(
   sandbox: SandboxInstance,
   options: DiagramOptions
 ): AsyncGenerator<Record<string, unknown>> {
+  // Set env var from header for SDK to use
+  if (options.apiKey) {
+    process.env.ANTHROPIC_API_KEY = options.apiKey;
+  }
+  
   const mcpUrl = `${sandbox.metadata?.url}/mcp`;
-  const apiKey = process.env.BL_API_KEY;
+  const apiKey = options.apiKey || process.env.BL_API_KEY;
   
   let rawOutput = '';
   let jsonStr = '';
@@ -214,8 +301,13 @@ export async function* chatWithRepo(
   sandbox: SandboxInstance,
   options: ChatOptions
 ): AsyncGenerator<Record<string, unknown>> {
+  // Set env var from header for SDK to use
+  if (options.apiKey) {
+    process.env.ANTHROPIC_API_KEY = options.apiKey;
+  }
+  
   const mcpUrl = `${sandbox.metadata?.url}/mcp`;
-  const apiKey = process.env.BL_API_KEY;
+  const apiKey = options.apiKey || process.env.BL_API_KEY;
   
   let finalResponse = '';
   const contextFiles: string[] = [];

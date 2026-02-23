@@ -44,6 +44,19 @@ export async function GET(
     const stream = new ReadableStream({
       start(controller) {
         let streamClosed = false;
+        let keepAlive: ReturnType<typeof setInterval> | null = null;
+        let unsubscribe: (() => void) | null = null;
+
+        const cleanup = () => {
+          if (keepAlive) {
+            clearInterval(keepAlive);
+            keepAlive = null;
+          }
+          if (unsubscribe) {
+            unsubscribe();
+            unsubscribe = null;
+          }
+        };
 
         const sendEvent = (event: JobEvent) => {
           if (streamClosed) return;
@@ -55,8 +68,7 @@ export async function GET(
             // Close stream immediately when job completes or errors
             if (event.type === 'complete' || event.type === 'error') {
               streamClosed = true;
-              clearInterval(keepAlive);
-              unsubscribe();
+              cleanup();
               // Small delay to ensure event flushes before closing
               setTimeout(() => {
                 try {
@@ -70,8 +82,7 @@ export async function GET(
             console.error('Error sending event:', error);
             if (!streamClosed) {
               streamClosed = true;
-              clearInterval(keepAlive);
-              unsubscribe();
+              cleanup();
               try {
                 controller.close();
               } catch (e) {
@@ -81,27 +92,36 @@ export async function GET(
           }
         };
 
+        // Replay buffered events first
         const bufferedEvents = getBufferedEvents(jobId);
         for (const event of bufferedEvents) {
           sendEvent(event);
         }
 
-        const unsubscribe = subscribeToJobEvents(jobId, sendEvent);
+        // Only set up subscription and keepalive if stream wasn't closed by buffered events
+        if (!streamClosed) {
+          unsubscribe = subscribeToJobEvents(jobId, sendEvent);
 
-        const keepAlive = setInterval(() => {
-          try {
-            controller.enqueue(encoder.encode(': keepalive\n\n'));
-          } catch (error) {
-            clearInterval(keepAlive);
-          }
-        }, 15000);
+          keepAlive = setInterval(() => {
+            if (streamClosed) {
+              cleanup();
+              return;
+            }
+            try {
+              controller.enqueue(encoder.encode(': keepalive\n\n'));
+            } catch {
+              cleanup();
+            }
+          }, 15000);
+        }
 
         request.signal.addEventListener('abort', () => {
-          clearInterval(keepAlive);
-          unsubscribe();
+          streamClosed = true;
+          cleanup();
           try {
             controller.close();
-          } catch (e) {
+          } catch {
+            // Stream already closed
           }
         });
       },

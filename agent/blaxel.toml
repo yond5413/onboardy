@@ -8,16 +8,22 @@ timeout = 900
 memory = 2048
 
 [[triggers]]
-type = "http"
+  id = "trigger-analyze"
+  type = "http"
 [triggers.configuration]
-path = "analyze"
+  path = "agents/onboardy-analyzer/analyze"
+  retry = 1
 
 [[triggers]]
-type = "http"
+  id = "trigger-diagram"
+  type = "http"
 [triggers.configuration]
-path = "diagram"
+  path = "agents/onboardy-analyzer/diagram"
+  retry = 1
 
 [[triggers]]
-type = "http"
+  id = "trigger-chat"
+  type = "http"
 [triggers.configuration]
-path = "chat"
+  path = "agents/onboardy-analyzer/chat"
+  retry = 1
