@@ -57,6 +57,58 @@ export interface QueryInput {
   };
 }
 
+
+const RETRYABLE_STATUS_CODES = new Set([408, 409, 425, 429, 500, 502, 503, 504, 529]);
+const MAX_ANTHROPIC_RETRIES = 3;
+const BASE_RETRY_DELAY_MS = 500;
+
+interface RetriableError {
+  status?: number;
+  message?: string;
+  headers?: {
+    get?: (name: string) => string | null;
+  };
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(error: unknown): number | null {
+  const candidate = error as RetriableError;
+  const retryAfterRaw = candidate.headers?.get?.('retry-after') ?? candidate.headers?.get?.('x-should-retry-after');
+
+  if (!retryAfterRaw) {
+    return null;
+  }
+
+  const numericValue = Number(retryAfterRaw);
+  if (!Number.isNaN(numericValue) && Number.isFinite(numericValue)) {
+    return Math.max(0, numericValue * 1000);
+  }
+
+  const retryDateMs = Date.parse(retryAfterRaw);
+  if (!Number.isNaN(retryDateMs)) {
+    return Math.max(0, retryDateMs - Date.now());
+  }
+
+  return null;
+}
+
+function isRetryableAnthropicError(error: unknown): error is RetriableError {
+  const candidate = error as RetriableError;
+  if (typeof candidate.status === 'number' && RETRYABLE_STATUS_CODES.has(candidate.status)) {
+    return true;
+  }
+
+  if (typeof candidate.message === 'string') {
+    const lower = candidate.message.toLowerCase();
+    return lower.includes('overloaded') || lower.includes('timeout') || lower.includes('temporarily unavailable');
+  }
+
+  return false;
+}
+
 interface MCPTool {
   name: string;
   description?: string;
@@ -244,6 +296,41 @@ class MCPClient {
   }
 }
 
+
+async function createMessageWithRetry(
+  anthropic: Anthropic,
+  params: Anthropic.MessageCreateParams,
+): Promise<Anthropic.Message> {
+  let attempt = 0;
+
+  while (true) {
+    attempt += 1;
+
+    try {
+      return await anthropic.messages.create(params);
+    } catch (error) {
+      const shouldRetry =
+        attempt <= MAX_ANTHROPIC_RETRIES && isRetryableAnthropicError(error);
+
+      if (!shouldRetry) {
+        throw error;
+      }
+
+      const retryAfterMs = parseRetryAfterMs(error);
+      const exponentialBackoffMs = BASE_RETRY_DELAY_MS * 2 ** (attempt - 1);
+      const jitterMs = Math.floor(Math.random() * 250);
+      const delayMs = Math.max(retryAfterMs ?? 0, exponentialBackoffMs + jitterMs);
+
+      const status = (error as RetriableError).status ?? 'unknown';
+      console.warn(
+        `[ClaudeClient] Anthropic request failed with status ${status}. Retrying in ${delayMs}ms (attempt ${attempt}/${MAX_ANTHROPIC_RETRIES}).`,
+      );
+
+      await sleep(delayMs);
+    }
+  }
+}
+
 export async function* query(input: QueryInput): AsyncGenerator<AgentMessage> {
   const anthropic = new Anthropic();
 
@@ -316,7 +403,7 @@ export async function* query(input: QueryInput): AsyncGenerator<AgentMessage> {
 
   try {
     for (let turn = 0; turn < maxTurns; turn += 1) {
-      const response = await anthropic.messages.create({
+      const response = await createMessageWithRetry(anthropic, {
         model: input.options.model,
         messages,
         max_tokens: 16384,
