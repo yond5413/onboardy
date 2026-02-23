@@ -1,4 +1,3 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SandboxInstance } from '@blaxel/core';
 import { readFile } from 'fs/promises';
 import path from 'path';
@@ -11,6 +10,11 @@ import {
   type AnalysisMetrics 
 } from './cost-tracker';
 import { JobEvents } from './job-events';
+
+const BLAXEL_WORKSPACE = process.env.BLAXEL_WORKSPACE || process.env.BL_WORKSPACE;
+const BLAXEL_AGENT_URL = BLAXEL_WORKSPACE 
+  ? `https://run.blaxel.ai/${BLAXEL_WORKSPACE}/agents/onboardy-analyzer`
+  : null;
 
 export interface OwnerInfo {
   name: string;
@@ -524,7 +528,91 @@ export interface DiagramResult {
 }
 
 /**
- * Analyze repository using Claude Haiku 4.5
+ * Call Blaxel agent via HTTP and stream results
+ */
+async function callBlaxelAgent(
+  endpoint: string,
+  body: Record<string, unknown>,
+  jobId: string,
+  onProgress?: (message: string) => void
+): Promise<{ markdown: string; highlevel?: string; technical?: string; rawOutput: string }> {
+  const apiKey = process.env.BL_API_KEY;
+  if (!apiKey) {
+    throw new Error('BL_API_KEY environment variable is required');
+  }
+
+  if (!BLAXEL_AGENT_URL) {
+    throw new Error('BLAXEL_WORKSPACE or BL_WORKSPACE environment variable is required');
+  }
+
+  const response = await fetch(`${BLAXEL_AGENT_URL}/${endpoint}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Blaxel agent request failed: ${response.status} ${response.statusText} - ${errorText}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('Failed to read response stream');
+  }
+
+  const decoder = new TextDecoder();
+  let finalResult: { markdown?: string; highlevel?: string; technical?: string; rawOutput?: string } = {};
+  let rawOutput = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const text = decoder.decode(value);
+    const lines = text.split('\n').filter(l => l.startsWith('data: '));
+
+    for (const line of lines) {
+      try {
+        const event = JSON.parse(line.slice(6));
+
+        if (event.type === 'text') {
+          rawOutput += event.text;
+          JobEvents.emitThinking(jobId, event.text);
+          onProgress?.(event.text);
+        } else if (event.type === 'tool') {
+          JobEvents.emitToolUse(jobId, event.name);
+          onProgress?.(`[Tool: ${event.name}]`);
+        } else if (event.type === 'highlevel') {
+          JobEvents.emitProgress(jobId, `Generated system design (${event.length} chars)`);
+          onProgress?.('Generated system design document');
+        } else if (event.type === 'technical') {
+          JobEvents.emitProgress(jobId, `Generated technical spec (${event.length} chars)`);
+          onProgress?.('Generated technical specification');
+        } else if (event.type === 'complete') {
+          finalResult = event;
+        } else if (event.type === 'error') {
+          throw new Error(`Agent error: ${event.error}`);
+        }
+      } catch {
+        // Skip non-JSON lines
+      }
+    }
+  }
+
+  return {
+    markdown: finalResult.markdown || finalResult.highlevel || finalResult.technical || rawOutput,
+    highlevel: finalResult.highlevel,
+    technical: finalResult.technical,
+    rawOutput: finalResult.rawOutput || rawOutput,
+  };
+}
+
+/**
+ * Analyze repository using Claude Haiku 4.5 via Blaxel agent
  * Fast, cost-effective analysis with excellent quality
  * Cost: $1/$5 per 1M tokens (vs $3/$15 for 3.5 Sonnet)
  * 
@@ -535,17 +623,8 @@ export async function analyzeRepoWithAgent(
   jobId: string,
   onProgress?: (message: string) => void
 ): Promise<AnalysisResult> {
-  const apiKey = process.env.BL_API_KEY;
-  if (!apiKey) {
-    throw new Error('BL_API_KEY environment variable is required');
-  }
-
-  const mcpUrl = `${sandbox.metadata?.url}/mcp`;
   const metrics = createMetrics(jobId);
   
-  let finalResult = '';
-  let rawOutput = '';
-
   const progress = (message: string) => {
     JobEvents.emitProgress(jobId, message);
     onProgress?.(message);
@@ -553,56 +632,24 @@ export async function analyzeRepoWithAgent(
 
   progress('Starting analysis with Claude Haiku 4.5...');
 
-  for await (const message of query({
-    prompt: ANALYSIS_PROMPT,
-    options: {
-      model: HAIKU_MODEL,
+  const result = await callBlaxelAgent(
+    'analyze',
+    {
+      sandboxName: (sandbox as unknown as { name?: string }).name || sandbox.metadata?.name,
+      prompt: ANALYSIS_PROMPT,
       systemPrompt: SYSTEM_PROMPT,
-      mcpServers: {
-        sandbox: {
-          type: 'http',
-          url: mcpUrl,
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-          },
-        },
-      },
-      // GUARDRAIL: Empty tools array forces agent to use ONLY sandbox MCP tools
-      // This prevents local filesystem access and ensures isolation
-      tools: [],
-      allowedTools: [],
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
+      model: HAIKU_MODEL,
+      jobId,
     },
-  })) {
-    if (message.type === 'assistant' && message.message?.content) {
-      for (const block of message.message.content) {
-        if ('text' in block) {
-          rawOutput += block.text;
-          finalResult += block.text;
-          if (block.text.length > 50) {
-            JobEvents.emitThinking(jobId, block.text.substring(0, 150));
-          }
-          if (onProgress) {
-            onProgress(block.text.substring(0, 150));
-          }
-        } else if ('name' in block) {
-          JobEvents.emitToolUse(jobId, block.name);
-          if (onProgress) {
-            onProgress(`[Tool: ${block.name}]`);
-          }
-        }
-      }
-    } else if (message.type === 'result' && message.subtype === 'success') {
-      finalResult = (message as { result?: string }).result || finalResult;
-    }
-  }
+    jobId,
+    onProgress
+  );
 
   // Track metrics
   updatePhase1Metrics(
     metrics,
     ANALYSIS_PROMPT,
-    rawOutput
+    result.rawOutput
   );
   finalizeMetrics(metrics);
 
@@ -614,13 +661,13 @@ export async function analyzeRepoWithAgent(
   JobEvents.emitComplete(jobId);
 
   return {
-    markdown: finalResult,
+    markdown: result.markdown,
     metrics,
   };
 }
 
 /**
- * Generate React Flow diagram data using Claude Haiku 4.5
+ * Generate React Flow diagram data using Claude Haiku 4.5 via Blaxel agent
  * Outputs structured JSON for architecture and data flow diagrams
  * 
  * GUARDRAIL: Repo is pre-cloned in sandbox. Agent only uses Read/Glob/Grep tools.
@@ -630,17 +677,8 @@ export async function generateDiagramWithAgent(
   jobId: string,
   onProgress?: (message: string) => void
 ): Promise<DiagramResult> {
-  const apiKey = process.env.BL_API_KEY;
-  if (!apiKey) {
-    throw new Error('BL_API_KEY environment variable is required');
-  }
-
-  const mcpUrl = `${sandbox.metadata?.url}/mcp`;
   const metrics = createMetrics(jobId);
   
-  let rawOutput = '';
-  let jsonStr = '';
-
   const progress = (message: string) => {
     JobEvents.emitProgress(jobId, message);
     onProgress?.(message);
@@ -648,61 +686,32 @@ export async function generateDiagramWithAgent(
 
   progress('Generating diagram data with Claude Haiku 4.5...');
 
-  for await (const message of query({
-    prompt: DIAGRAM_PROMPT,
-    options: {
-      model: HAIKU_MODEL,
+  const result = await callBlaxelAgent(
+    'diagram',
+    {
+      sandboxName: (sandbox as unknown as { name?: string }).name || sandbox.metadata?.name,
+      prompt: DIAGRAM_PROMPT,
       systemPrompt: SYSTEM_PROMPT,
-      mcpServers: {
-        sandbox: {
-          type: 'http',
-          url: mcpUrl,
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-          },
-        },
-      },
-      tools: [],
-      allowedTools: [],
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
+      model: HAIKU_MODEL,
+      jobId,
     },
-  })) {
-    if (message.type === 'assistant' && message.message?.content) {
-      for (const block of message.message.content) {
-        if ('text' in block) {
-          rawOutput += block.text;
-          if (block.text.length > 50) {
-            JobEvents.emitThinking(jobId, block.text.substring(0, 100));
-          }
-          if (onProgress) {
-            onProgress(block.text.substring(0, 100));
-          }
-        } else if ('name' in block) {
-          JobEvents.emitToolUse(jobId, block.name);
-          if (onProgress) {
-            onProgress(`[Tool: ${block.name}]`);
-          }
-        }
-      }
-    } else if (message.type === 'result' && message.subtype === 'success') {
-      jsonStr = (message as { result?: string }).result || '';
-    }
-  }
+    jobId,
+    onProgress
+  );
 
-  // Extract JSON from response
+  // The diagram result is different - parse it
   let diagramData: DiagramResult;
   try {
-    const jsonMatch = jsonStr.match(/```json\n([\s\S]*?)\n```/);
+    // Try to parse as DiagramResult from the markdown response
+    const jsonMatch = result.rawOutput.match(/```json\n([\s\S]*?)\n```/);
     if (jsonMatch && jsonMatch[1]) {
       diagramData = JSON.parse(jsonMatch[1]);
     } else {
-      // Try parsing the whole response
-      diagramData = JSON.parse(jsonStr);
+      diagramData = JSON.parse(result.rawOutput);
     }
   } catch (parseError) {
     console.error('[Diagram] Failed to parse JSON:', parseError);
-    console.log('[Diagram] Raw response:', jsonStr.substring(0, 500));
+    console.log('[Diagram] Raw response:', result.rawOutput.substring(0, 500));
     throw new Error('Failed to generate diagram data - invalid JSON response');
   }
 
@@ -710,7 +719,7 @@ export async function generateDiagramWithAgent(
   updatePhase1Metrics(
     metrics,
     DIAGRAM_PROMPT,
-    rawOutput
+    result.rawOutput
   );
   finalizeMetrics(metrics);
 
@@ -728,11 +737,6 @@ export async function analyzeRepoIterative(
   type: AnalysisType = 'highlevel',
   onProgress?: (message: string) => void
 ): Promise<AnalysisResult> {
-  const apiKey = process.env.BL_API_KEY;
-  if (!apiKey) {
-    throw new Error('BL_API_KEY environment variable is required');
-  }
-
   const prompts = {
     highlevel: { prompt: HIGHLEVEL_PROMPT, outputFile: '/repo/system-design.md', name: 'High-Level' },
     technical: { prompt: TECHNICAL_PROMPT, outputFile: '/repo/technical-spec.md', name: 'Technical' },
@@ -744,15 +748,8 @@ export async function analyzeRepoIterative(
   };
 
   const config = prompts[type];
-  const mcpUrl = `${sandbox.metadata?.url}/mcp`;
   const metrics = createMetrics(jobId);
   
-  let rawOutput = '';
-  let finalResult = '';
-  let notesContent = '';
-  let highlevelContent = '';
-  let technicalContent = '';
-
   const progress = (message: string) => {
     JobEvents.emitProgress(jobId, message);
     onProgress?.(message);
@@ -760,95 +757,39 @@ export async function analyzeRepoIterative(
 
   progress(`Starting ${config.name} iterative analysis with Claude Haiku 4.5...`);
 
-  const agent = query({
-    prompt: config.prompt,
-    options: {
-      model: HAIKU_MODEL,
+  const result = await callBlaxelAgent(
+    'analyze',
+    {
+      sandboxName: (sandbox as unknown as { name?: string }).name || sandbox.metadata?.name,
+      prompt: config.prompt,
       systemPrompt: SYSTEM_PROMPT,
-      mcpServers: {
-        sandbox: {
-          type: 'http',
-          url: mcpUrl,
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-          },
-        },
-      },
-      tools: [],
-      allowedTools: [],
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
-      maxTurns: 50,
+      model: HAIKU_MODEL,
+      jobId,
     },
-  });
+    jobId,
+    onProgress
+  );
 
-  const agentIterator = agent[Symbol.asyncIterator]();
-  
-  while (true) {
-    const { done, value: message } = await agentIterator.next();
-    if (done) break;
-
-    if (message.type === 'assistant' && message.message?.content) {
-      for (const block of message.message.content) {
-        if ('text' in block) {
-          rawOutput += block.text;
-          finalResult += block.text;
-          if (block.text.length > 50) {
-            JobEvents.emitThinking(jobId, block.text.substring(0, 150));
-          }
-          if (onProgress) {
-            onProgress(block.text.substring(0, 150));
-          }
-        } else if ('name' in block) {
-          const toolName = block.name;
-          JobEvents.emitToolUse(jobId, toolName);
-          if (onProgress) {
-            onProgress(`[Tool: ${toolName}]`);
-          }
-        }
-      }
-    } else if (message.type === 'result' && message.subtype === 'success') {
-      const resultText = (message as { result?: string }).result;
-      if (resultText) {
-        finalResult = resultText;
-        if (resultText.includes('/repo/system-design.md')) {
-          highlevelContent = resultText;
-        } else if (resultText.includes('/repo/technical-spec.md')) {
-          technicalContent = resultText;
-        }
-      }
-    } else if (message.type === 'system') {
-      const sysMsg = message as { subtype?: string; output?: { path?: string; content?: string } };
-      if (sysMsg.output?.path === '/repo/.analysis-notes.md') {
-        notesContent = sysMsg.output.content || '';
-      } else if (sysMsg.output?.path === '/repo/system-design.md') {
-        highlevelContent = sysMsg.output.content || '';
-      } else if (sysMsg.output?.path === '/repo/technical-spec.md') {
-        technicalContent = sysMsg.output.content || '';
-      }
-    }
-  }
-
-  const result: AnalysisResult = {
-    markdown: highlevelContent || technicalContent || finalResult,
+  const finalResult: AnalysisResult = {
+    markdown: result.markdown,
     metrics,
   };
 
-  if (highlevelContent) {
-    result.highlevel = highlevelContent;
+  if (result.highlevel) {
+    finalResult.highlevel = result.highlevel;
   }
-  if (technicalContent) {
-    result.technical = technicalContent;
+  if (result.technical) {
+    finalResult.technical = result.technical;
   }
 
-  if (!result.markdown || result.markdown.length < 100) {
-    result.markdown = finalResult;
+  if (!finalResult.markdown || finalResult.markdown.length < 100) {
+    finalResult.markdown = result.rawOutput;
   }
 
   updatePhase1Metrics(
     metrics,
     config.prompt,
-    rawOutput
+    result.rawOutput
   );
   finalizeMetrics(metrics);
 
@@ -858,7 +799,7 @@ export async function analyzeRepoIterative(
   progress('Analysis complete!');
   JobEvents.emitComplete(jobId);
 
-  return result;
+  return finalResult;
 }
 
 /**

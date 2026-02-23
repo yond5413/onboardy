@@ -1,4 +1,3 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import type { SandboxInstance } from '@blaxel/core';
 
 const HAIKU_MODEL = 'claude-haiku-4-5';
@@ -104,6 +103,11 @@ export class ChatAgentError extends Error {
   }
 }
 
+const BLAXEL_WORKSPACE = process.env.BLAXEL_WORKSPACE || process.env.BL_WORKSPACE;
+const BLAXEL_AGENT_URL = BLAXEL_WORKSPACE 
+  ? `https://run.blaxel.ai/${BLAXEL_WORKSPACE}/agents/onboardy-analyzer`
+  : null;
+
 export async function chatWithAgent(
   sandbox: SandboxInstance | null | undefined,
   jobId: string,
@@ -127,58 +131,84 @@ export async function chatWithAgent(
     );
   }
 
-  if (!sandbox.metadata?.url) {
+  if (!BLAXEL_AGENT_URL) {
     throw new ChatAgentError(
-      'SANDBOX_METADATA_URL_MISSING',
-      'Sandbox metadata URL is missing. The sandbox may not be properly initialized.'
+      'MISSING_API_KEY',
+      'BLAXEL_WORKSPACE or BL_WORKSPACE environment variable is required'
     );
   }
 
-  const mcpUrl = `${sandbox.metadata.url}/mcp`;
-  console.log(
-    `[ChatAgent] Starting chat for job ${jobId} with MCP ${mcpUrl} and ${SANDBOX_ALLOWED_TOOLS.length} allowed tools`
-  );
+  const sandboxName = (sandbox as unknown as { name?: string }).name || sandbox.metadata?.name;
+  console.log(`[ChatAgent] Starting chat for job ${jobId} via Blaxel agent`);
 
+  const messages = [
+    ...conversationHistory.map(msg => ({ role: msg.role, content: msg.content })),
+    { role: 'user', content: question }
+  ];
+
+  const response = await fetch(`${BLAXEL_AGENT_URL}/chat`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      sandboxName,
+      messages,
+      context,
+      graphContext,
+      model: HAIKU_MODEL,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new ChatAgentError(
+      'AGENT_NO_RESPONSE',
+      `Blaxel agent request failed: ${response.status} ${response.statusText} - ${errorText}`
+    );
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new ChatAgentError(
+      'AGENT_NO_RESPONSE',
+      'Failed to read response stream'
+    );
+  }
+
+  const decoder = new TextDecoder();
   let finalResponse = '';
   const contextFiles: string[] = [];
 
-  const historyPrompt = conversationHistory
-    .map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
-    .join('\n\n');
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
 
-  const fullPrompt = historyPrompt
-    ? `${historyPrompt}\n\n${formatGraphContext(graphContext)}User: ${question}`
-    : CHAT_PROMPT_TEMPLATE(question, context, graphContext);
+    const text = decoder.decode(value);
+    const lines = text.split('\n').filter(l => l.startsWith('data: '));
 
-  for await (const message of query({
-    prompt: fullPrompt,
-    options: {
-      model: HAIKU_MODEL,
-      systemPrompt: CHAT_SYSTEM_PROMPT,
-      mcpServers: {
-        sandbox: {
-          type: 'http',
-          url: mcpUrl,
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-          },
-        },
-      },
-      allowedTools: SANDBOX_ALLOWED_TOOLS,
-      permissionMode: 'bypassPermissions',
-      allowDangerouslySkipPermissions: true,
-    },
-  })) {
-    if (message.type === 'assistant' && message.message?.content) {
-      for (const block of message.message.content) {
-        if ('text' in block) {
-          finalResponse += block.text;
-        } else if ('name' in block) {
-          contextFiles.push(block.name);
+    for (const line of lines) {
+      try {
+        const event = JSON.parse(line.slice(6));
+        if (event.type === 'text') {
+          finalResponse += event.text;
+        } else if (event.type === 'tool') {
+          contextFiles.push(event.name);
+        } else if (event.type === 'complete') {
+          finalResponse = event.response || finalResponse;
+          if (event.contextFiles) {
+            contextFiles.push(...event.contextFiles);
+          }
+        } else if (event.type === 'error') {
+          throw new ChatAgentError(
+            'AGENT_NO_RESPONSE',
+            `Agent error: ${event.error}`
+          );
         }
+      } catch {
+        // Skip non-JSON lines
       }
-    } else if (message.type === 'result' && message.subtype === 'success') {
-      finalResponse = (message as { result?: string }).result || finalResponse;
     }
   }
 

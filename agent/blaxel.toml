@@ -1,0 +1,22 @@
+name = "onboardy-analyzer"
+type = "agent"
+public = false
+
+[runtime]
+timeout = 900
+memory = 2048
+
+[[triggers]]
+type = "http"
+[triggers.configuration]
+path = "analyze"
+
+[[triggers]]
+type = "http"
+[triggers.configuration]
+path = "diagram"
+
+[[triggers]]
+type = "http"
+[triggers.configuration]
+path = "chat"
