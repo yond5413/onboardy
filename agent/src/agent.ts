@@ -58,6 +58,7 @@ export async function* analyzeRepo(
 ): AsyncGenerator<Record<string, unknown>> {
   const mcpUrl = `${sandbox.metadata?.url}/mcp`;
   const apiKey = process.env.BL_API_KEY;
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
   
   let notesContent = '';
   let highlevelContent = '';
