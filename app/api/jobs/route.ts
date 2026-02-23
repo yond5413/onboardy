@@ -235,7 +235,7 @@ export async function POST(request: Request) {
 interface JobResults {
   markdown?: string;
   analysisMetrics?: AnalysisMetrics;
-  layeredMarkdown?: { executiveSummary: string; technicalDeepDive: string };
+  layeredMarkdown?: { executiveSummary: string; developerOnboarding: string; technicalDeepDive: string };
   reactFlowData?: ReactFlowData;
   analysisContext?: AnalysisContext;
   ownershipData?: OwnershipData;
@@ -462,6 +462,7 @@ async function processJob(
       status: finalStatus,
       markdown_content: results.markdown,
       markdown_executive_summary: results.layeredMarkdown?.executiveSummary || undefined,
+      markdown_developer_onboarding: results.layeredMarkdown?.developerOnboarding || undefined,
       markdown_technical_deep_dive: results.layeredMarkdown?.technicalDeepDive || undefined,
       analysis_metrics: results.analysisMetrics || undefined,
       analysis_context: results.analysisContext,

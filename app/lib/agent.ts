@@ -172,30 +172,24 @@ Your expertise includes:
 
 The repository is already available at /repo. Focus on analyzing the existing files.`;
 
-const ANALYSIS_PROMPT = `Analyze the repository at /repo and generate a comprehensive system design document with depth for multiple audiences.
+const ANALYSIS_PROMPT = `Analyze the repository at /repo and generate a system design document for multiple audiences.
 
-## Exploration Strategy (Cost-Optimized)
+## Exploration Strategy
 
-Use these efficient patterns to explore the codebase:
-1. **Glob patterns**: Find all config files: package.json, tsconfig.json, requirements.txt, Cargo.toml, go.mod, Dockerfile, .env* files
-2. **Grep patterns**: Search for key indicators:
-   - API routes: \`router\`, \`route\`, \`@app.route\`, \`@post\`, \`@get\`, \`express.Router\`
-   - Data models: \`interface\`, \`type\`, \`class\`, \`model\`, \`schema\`, \`type.*=\`
-   - Authentication: \`auth\`, \`middleware\`, \`jwt\`, \`session\`, \`passport\`
-   - Error handling: \`catch\`, \`error\`, \`exception\`, \`try\`
-   - External APIs: \`http\`, \`axios\`, \`fetch\`, \`client\`, \`sdk\`
-3. **Read strategically**: Entry points first (index, main, app files), then config files, then 3-5 key domain files
+1. **Glob patterns**: Find config files: package.json, tsconfig.json, requirements.txt, Cargo.toml, go.mod, Dockerfile, .env*
+2. **Grep patterns**: Search for API routes, data models, auth patterns, external APIs
+3. **Read strategically**: Entry points first, then config, then 3-5 key domain files
 
 ## Output Format
 
-Create a LAYERED markdown document that serves multiple audiences. Output ONLY markdown with sections clearly marked for each layer.
+Create a LAYERED markdown document. Output ONLY markdown. IMPORTANT: Complete ALL three layers fully.
 
 ---
 
-## LAYER 1: EXECUTIVE SUMMARY (For non-technical stakeholders - ~2 min read)
+## LAYER 1: EXECUTIVE SUMMARY
 
 ### What This System Does
-2-3 sentences explaining the core value: what problem it solves, primary use case.
+2-3 sentences: what problem it solves, primary use case.
 
 ### Key Features
 - Feature 1: Brief explanation
@@ -204,15 +198,13 @@ Create a LAYERED markdown document that serves multiple audiences. Output ONLY m
 
 ---
 
-## LAYER 2: DEVELOPER ONBOARDING (For newbie developers - ~10 min read)
+## LAYER 2: DEVELOPER ONBOARDING
 
 ### Tech Stack
-Bullet list of main technologies (languages, frameworks, databases, key libraries with versions if available).
+Bullet list of technologies (languages, frameworks, databases, key libraries with versions).
 
 ### Architecture Overview
-Brief description of the high-level architecture pattern (e.g., Client-Server, Microservices, Monolith, Serverless, MVC).
-
-Include a Mermaid diagram showing system boundaries:
+Brief description of the architecture pattern. Include a Mermaid diagram:
 \`\`\`mermaid
 graph TD
     A[Client] --> B[API/Entry]
@@ -221,143 +213,53 @@ graph TD
 \`\`\`
 
 ### Project Structure
-Quick tour of the repository layout:
-- /repo/src - What's here
-- /repo/app - What's here
-- /repo/api - What's here
-(etc. for main directories)
+Quick tour of the repository layout with main directories.
 
 ### Getting Started
-
 #### Prerequisites
-- Required software/versions
-- Required environment variables
-- Accounts or API keys needed
-
+Required software, environment variables, API keys.
 #### Installation
-Step-by-step commands:
-\`\`\`bash
-git clone ...
-cd repo
-npm install
-npm run dev
-\`\`\`
-
+Step-by-step commands to clone, install, and run.
 #### Key Files to Read First
-Ordered list (read in this order):
-1. /repo/path/to/file.ts - Why: Entry point, explains overall flow
-2. /repo/path/to/config.ts - Why: Configuration and setup
-3. /repo/path/to/models.ts - Why: Core data structures
-4. /repo/path/to/api.ts - Why: Main API endpoints
-5. /repo/path/to/service.ts - Why: Business logic
-(Minimum 5, maximum 10)
+Ordered list of 5-10 important files with brief reasons.
 
 ---
 
-## LAYER 3: TECHNICAL DEEP DIVE (For experienced developers - ~20 min read)
+## LAYER 3: TECHNICAL DEEP DIVE
 
 ### Key Components
-CRITICAL: MUST use proper markdown table format with pipes and dashes.
+Use a markdown table. Include ALL significant components.
 
-List ALL significant components (not limited to 8-12).
+| Name | Purpose | Key Files |
+|------|---------|-----------|
+| ComponentName | What it does | /repo/path/to/file.ts |
 
-Format:
-| Name | Purpose | Responsibilities | Key Files |
-|------|---------|------------------|-----------|
-| ComponentName | What it does | 1. Task, 2. Task, 3. Task | /repo/path/to/file.ts |
-| AnotherComponent | Brief description | 1. Task, 2. Task | /repo/path/to/another.ts |
+### API Endpoints
+For each significant route: method, path, purpose, handler file.
 
-Requirements:
-- Exactly 4 columns: Name, Purpose, Responsibilities, Key Files
-- Use proper markdown table syntax with | separators
-- Include header separator line with dashes
-- Key Files column must contain specific paths starting with /repo/
-- Each row on its own line
-- Be complete: include all major components (services, handlers, models, utilities)
-
-### API Endpoints (if applicable)
-For each significant route/endpoint:
-\`\`\`
-POST /api/users
-- Purpose: Create a new user
-- Request: { name, email, password }
-- Response: { id, name, email, createdAt }
-- Handler: /repo/app/api/users/route.ts
-\`\`\`
-
-### Data Models & Schemas
-TypeScript interfaces or database schemas for key data structures:
-\`\`\`
-User {
-  id: string
-  email: string
-  name: string
-  createdAt: Date
-}
-\`\`\`
-
-### Authentication & Security
-- How are users authenticated? (JWT, OAuth, Sessions, etc.)
-- Where is auth enforced? (Middleware, Guards, etc.)
-- Key security patterns used
-
-### Error Handling & Logging
-- How are errors handled? (Try-catch, Error boundaries, etc.)
-- What's logged? Where? (Console, Files, External services?)
-- Key error codes or patterns
-
-### Environment Configuration
-Key environment variables and what they control:
-- DATABASE_URL: Connection to database
-- API_KEY: External service authentication
-- etc.
-
-### External Integrations
-Third-party services used:
-- Service Name (API endpoint, what it's used for)
-- Another Service (purpose, authentication method)
+### Data Models
+Key TypeScript interfaces or database schemas as code blocks.
 
 ### Data Flow
-Detailed steps (numbered 1, 2, 3...) showing how a typical request flows through the system:
-1. User initiates action via UI
-2. Frontend makes HTTP request to /api/endpoint
-3. API handler validates request
-4. Service layer processes business logic
-5. Database query executed
-6. Response formatted and returned
-(Minimum 8 steps, be specific with actual flow)
+Numbered steps (minimum 6) showing how a typical request flows through the system. Be specific with actual function/file names.
+
+### Environment & Configuration
+Key environment variables and config files.
 
 ### Key Design Decisions
-Explain 2-3 important architectural choices:
-
-1. **Decision Name**: 
-   - What was decided
-   - Why this choice was made
-   - Trade-offs considered
-   - Impact on the system
-
-2. **Decision Name**: (same format)
-
-3. **Decision Name**: (same format)
-
-### Testing Strategy
-- What's tested? (Unit, Integration, E2E)
-- Test locations: /repo/path/to/tests
-- How to run tests: \`npm run test\`
+2-3 important architectural choices with rationale.
 
 ---
 
 ## Rules
-- No conversational filler (no "Perfect!", "I've created", etc.)
-- No emojis
-- No introductory summaries before sections
+- No conversational filler, no emojis
 - Be specific and scannable
 - Use tables and code blocks for clarity
-- Use specific file paths (all starting with /repo/)
-- DO NOT attempt to clone or download anything - work only with existing /repo contents
-- Output ONLY markdown - no JSON code blocks
-- ENSURE all markdown tables use proper syntax with | separators and header rows
-- Layers should be clearly visible by their markdown structure`;
+- All file paths start with /repo/
+- DO NOT clone or download anything - analyze existing /repo contents only
+- Output ONLY markdown - no JSON
+- ENSURE proper markdown table syntax
+- Complete ALL three layers - do not truncate`;
 
 
 
@@ -573,6 +475,7 @@ export async function analyzeRepoWithAgent(
       allowedTools: [],
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
+      maxTurns: 50,
     },
   })) {
     if (message.type === 'assistant' && message.message?.content) {

@@ -1,12 +1,54 @@
 /**
  * Markdown Layer Extractor
  * Separates layered markdown output into audience-specific documents
+ * 
+ * Uses robust regex matching to handle LLM formatting variations:
+ *   ## LAYER 1: TITLE
+ *   ## **LAYER 1: TITLE**
+ *   #### LAYER 1: TITLE
+ *   ## Layer 1: TITLE
  */
 
 export interface LayeredMarkdown {
   full: string; // Complete layered document
   executiveSummary: string; // Layer 1: For non-technical stakeholders
+  developerOnboarding: string; // Layer 2: For newbie developers
   technicalDeepDive: string; // Layer 3: For experienced developers
+}
+
+/**
+ * Build a case-insensitive regex that finds a LAYER N marker line.
+ * Handles: ## LAYER 1:, #### **LAYER 1: ...**,  ## layer 1:, etc.
+ */
+function layerMarkerRegex(n: number): RegExp {
+  // Match optional markdown heading prefix, optional bold markers, 
+  // the LAYER N: text (case-insensitive), and any trailing text on the same line
+  return new RegExp(`^#{1,6}\\s*\\*{0,2}\\s*layer\\s+${n}\\s*[:.].*$`, 'im');
+}
+
+/**
+ * Find the character index where a layer marker starts.
+ * Returns -1 if not found.
+ */
+function findLayerStart(markdown: string, layerNumber: number): number {
+  const match = markdown.match(layerMarkerRegex(layerNumber));
+  if (!match || match.index === undefined) return -1;
+  return match.index;
+}
+
+/**
+ * Strip the layer marker heading line and surrounding horizontal rules from extracted content.
+ */
+function cleanLayerContent(content: string, layerNumber: number): string {
+  let cleaned = content;
+
+  // Remove the layer marker heading line itself
+  cleaned = cleaned.replace(layerMarkerRegex(layerNumber), '').trim();
+
+  // Remove horizontal rules (---)
+  cleaned = cleaned.replace(/^---+$/gm, '').trim();
+
+  return cleaned;
 }
 
 /**
@@ -15,28 +57,36 @@ export interface LayeredMarkdown {
  */
 export function extractExecutiveSummary(markdown: string): string {
   try {
-    const layer1Start = markdown.indexOf('LAYER 1:');
-    const layer2Start = markdown.indexOf('LAYER 2:');
+    const layer1Start = findLayerStart(markdown, 1);
+    if (layer1Start === -1) return '';
 
-    if (layer1Start === -1) {
-      return ''; // Layer markers not found
-    }
+    const layer2Start = findLayerStart(markdown, 2);
+    const end = layer2Start !== -1 ? layer2Start : markdown.length;
 
-    let end = layer2Start !== -1 ? layer2Start : markdown.length;
-    let summary = markdown.substring(layer1Start, end).trim();
-
-    // Remove the layer marker line completely (handles #### **LAYER 1: TITLE** format)
-    summary = summary.replace(/^.*LAYER 1:.*$/m, '').trim();
-    
-    // Remove trailing layer 2 marker if present
-    summary = summary.replace(/^.*LAYER 2:.*$/m, '').trim();
-    
-    // Remove horizontal rules (---)
-    summary = summary.replace(/^---+$/gm, '').trim();
-    
-    return summary;
+    const raw = markdown.substring(layer1Start, end).trim();
+    return cleanLayerContent(raw, 1);
   } catch (error) {
     console.error('Failed to extract executive summary:', error);
+    return '';
+  }
+}
+
+/**
+ * Extract layer 2 (Developer Onboarding) from layered markdown
+ * Returns content from "LAYER 2" up to "LAYER 3"
+ */
+export function extractDeveloperOnboarding(markdown: string): string {
+  try {
+    const layer2Start = findLayerStart(markdown, 2);
+    if (layer2Start === -1) return '';
+
+    const layer3Start = findLayerStart(markdown, 3);
+    const end = layer3Start !== -1 ? layer3Start : markdown.length;
+
+    const raw = markdown.substring(layer2Start, end).trim();
+    return cleanLayerContent(raw, 2);
+  } catch (error) {
+    console.error('Failed to extract developer onboarding:', error);
     return '';
   }
 }
@@ -47,21 +97,11 @@ export function extractExecutiveSummary(markdown: string): string {
  */
 export function extractTechnicalDeepDive(markdown: string): string {
   try {
-    const layer3Start = markdown.indexOf('LAYER 3:');
+    const layer3Start = findLayerStart(markdown, 3);
+    if (layer3Start === -1) return '';
 
-    if (layer3Start === -1) {
-      return ''; // Layer marker not found
-    }
-
-    let deepDive = markdown.substring(layer3Start).trim();
-
-    // Remove the layer marker line completely (handles #### **LAYER 3: TITLE** format)
-    deepDive = deepDive.replace(/^.*LAYER 3:.*$/m, '').trim();
-    
-    // Remove horizontal rules
-    deepDive = deepDive.replace(/^---+$/gm, '').trim();
-    
-    return deepDive;
+    const raw = markdown.substring(layer3Start).trim();
+    return cleanLayerContent(raw, 3);
   } catch (error) {
     console.error('Failed to extract technical deep dive:', error);
     return '';
@@ -75,6 +115,7 @@ export function extractLayeredMarkdown(markdown: string): LayeredMarkdown {
   return {
     full: markdown,
     executiveSummary: extractExecutiveSummary(markdown),
+    developerOnboarding: extractDeveloperOnboarding(markdown),
     technicalDeepDive: extractTechnicalDeepDive(markdown),
   };
 }
@@ -84,14 +125,14 @@ export function extractLayeredMarkdown(markdown: string): LayeredMarkdown {
  */
 export function validateLayeredMarkdown(markdown: string): {
   valid: boolean;
-  haslayer1: boolean;
+  hasLayer1: boolean;
   hasLayer2: boolean;
   hasLayer3: boolean;
   missingLayers: string[];
 } {
-  const hasLayer1 = markdown.includes('LAYER 1:');
-  const hasLayer2 = markdown.includes('LAYER 2:');
-  const hasLayer3 = markdown.includes('LAYER 3:');
+  const hasLayer1 = findLayerStart(markdown, 1) !== -1;
+  const hasLayer2 = findLayerStart(markdown, 2) !== -1;
+  const hasLayer3 = findLayerStart(markdown, 3) !== -1;
 
   const missingLayers: string[] = [];
   if (!hasLayer1) missingLayers.push('Layer 1 (Executive Summary)');
@@ -100,7 +141,7 @@ export function validateLayeredMarkdown(markdown: string): {
 
   return {
     valid: hasLayer1 && hasLayer2 && hasLayer3,
-    haslayer1: hasLayer1,
+    hasLayer1,
     hasLayer2,
     hasLayer3,
     missingLayers,

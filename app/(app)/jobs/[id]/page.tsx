@@ -65,6 +65,7 @@ interface JobData {
   status: string;
   markdown_content?: string;
   markdown_executive_summary?: string;
+  markdown_developer_onboarding?: string;
   markdown_technical_deep_dive?: string;
   script_content?: string;
   audio_file_path?: string;
@@ -782,7 +783,11 @@ export default function JobDetailPage() {
                   </p>
                 </CardHeader>
                 <CardContent>
-                  <MarkdownRenderer content={job.markdown_content} renderMermaid />
+                  {job.markdown_developer_onboarding ? (
+                    <MarkdownRenderer content={job.markdown_developer_onboarding} renderMermaid />
+                  ) : (
+                    <MarkdownRenderer content={job.markdown_content} renderMermaid />
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>

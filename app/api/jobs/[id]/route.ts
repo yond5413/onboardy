@@ -78,6 +78,7 @@ export async function GET(
       status: job.status,
       markdown_content: job.markdown_content,
       markdown_executive_summary: job.markdown_executive_summary,
+      markdown_developer_onboarding: job.markdown_developer_onboarding,
       markdown_technical_deep_dive: job.markdown_technical_deep_dive,
       script_content: job.script_content,
       audio_file_path: job.audio_file_path,
