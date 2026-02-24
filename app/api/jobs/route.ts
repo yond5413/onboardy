@@ -408,7 +408,14 @@ async function processJob(
       const ownershipStartTime = await startStage('ownership');
       
       try {
-        results.ownershipData = await analyzeOwnership(githubUrl, results.reactFlowData);
+        results.ownershipData = await analyzeOwnership(
+          githubUrl,
+          results.reactFlowData,
+          (message) => {
+            JobEvents.emitProgress(jobId, message);
+            console.log(`[${jobId}] ${message}`);
+          }
+        );
         console.log(`[${jobId}] Ownership analysis complete`);
         
         await completeStage('ownership', ownershipStartTime);
@@ -439,11 +446,13 @@ async function processJob(
       const exportStartTime = await startStage('export');
       
       try {
+        JobEvents.emitProgress(jobId, 'Exporting analysis outputs to storage...');
         results.exportPaths = await exportAnalysisOutputs(jobId, {
           markdown: results.markdown,
           diagramJson: results.reactFlowData ? JSON.stringify(results.reactFlowData, null, 2) : undefined,
           contextJson: results.analysisContext ? JSON.stringify(results.analysisContext, null, 2) : undefined,
         });
+        JobEvents.emitProgress(jobId, 'Export files uploaded successfully');
         
         console.log(`[${jobId}] Export complete`);
         await completeStage('export', exportStartTime);

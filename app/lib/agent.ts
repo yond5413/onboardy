@@ -514,7 +514,6 @@ export async function analyzeRepoWithAgent(
   console.log('Metrics JSON:', JSON.stringify(exportMetrics(metrics), null, 2));
 
   progress('Analysis complete!');
-  JobEvents.emitComplete(jobId);
 
   return {
     markdown: finalResult,
@@ -759,7 +758,6 @@ export async function analyzeRepoIterative(
   console.log('Metrics JSON:', JSON.stringify(exportMetrics(metrics), null, 2));
 
   progress('Analysis complete!');
-  JobEvents.emitComplete(jobId);
 
   return result;
 }

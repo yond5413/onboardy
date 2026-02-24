@@ -70,38 +70,73 @@ export function AgentLogStream({ jobId, isActive, onComplete, onStageUpdate }: A
   useEffect(() => {
     if (!isActive) return;
 
-    const eventSource = new EventSource(`/api/jobs/${jobId}/stream`);
+    let currentSource: EventSource | null = null;
+    let retryCount = 0;
+    let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+    let cancelled = false;
+    const MAX_RETRIES = 3;
+    const seenEventIds = new Set<string>();
 
-    eventSource.onopen = () => {
-      setIsConnected(true);
-    };
+    const connect = () => {
+      if (cancelled) return;
 
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as LogEvent;
-        setLogs((prev) => [...prev, data]);
-        
-        if (data.stage) {
-          updateStageFromEvent(data);
+      const eventSource = new EventSource(`/api/jobs/${jobId}/stream`);
+      currentSource = eventSource;
+
+      eventSource.onopen = () => {
+        setIsConnected(true);
+        retryCount = 0; // Reset on successful connection
+      };
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as LogEvent & { id?: string };
+
+          // Deduplicate replayed events on reconnect
+          if (data.id && seenEventIds.has(data.id)) return;
+          if (data.id) seenEventIds.add(data.id);
+
+          setLogs((prev) => [...prev, data]);
+          
+          if (data.stage) {
+            updateStageFromEvent(data);
+          }
+
+          if (data.type === 'complete') {
+            onComplete?.();
+            eventSource.close();
+            currentSource = null;
+            setIsConnected(false);
+          }
+        } catch (e) {
+          console.error('Failed to parse log event:', e);
         }
+      };
 
-        if (data.type === 'complete') {
-          onComplete?.();
-          eventSource.close();
-          setIsConnected(false);
+      eventSource.onerror = () => {
+        eventSource.close();
+        currentSource = null;
+        setIsConnected(false);
+
+        // Auto-reconnect with exponential backoff if job is still active
+        if (!cancelled && retryCount < MAX_RETRIES) {
+          const delay = Math.min(1000 * Math.pow(2, retryCount), 8000);
+          retryCount++;
+          console.log(`[AgentLogStream] Reconnecting in ${delay}ms (attempt ${retryCount}/${MAX_RETRIES})`);
+          retryTimeout = setTimeout(connect, delay);
         }
-      } catch (e) {
-        console.error('Failed to parse log event:', e);
-      }
+      };
     };
 
-    eventSource.onerror = () => {
-      setIsConnected(false);
-      eventSource.close();
-    };
+    connect();
 
     return () => {
-      eventSource.close();
+      cancelled = true;
+      if (retryTimeout) clearTimeout(retryTimeout);
+      if (currentSource) {
+        currentSource.close();
+        currentSource = null;
+      }
       setIsConnected(false);
     };
   }, [jobId, isActive]);
