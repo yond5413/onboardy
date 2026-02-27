@@ -6,7 +6,8 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2, Headphones, Clock, Users, Mic } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Loader2, Headphones, Clock, Users, Mic, Info } from 'lucide-react';
 import type { PodcastSettings, PodcastDuration, PodcastTone, PodcastAudience } from '@/app/lib/script';
 import { DURATION_WORDS } from '@/app/lib/script';
 
@@ -44,14 +45,25 @@ export function PodcastSettingsModal({
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Headphones className="h-5 w-5" />
-          Podcast Settings
+          {existingSettings ? 'Generate New Podcast Version' : 'Podcast Settings'}
         </CardTitle>
         <CardDescription>
-          Configure your podcast generation options
+          {existingSettings 
+            ? 'This will create a new version while keeping previous versions accessible'
+            : 'Configure your podcast generation options'}
         </CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit}>
         <CardContent className="space-y-6">
+          {existingSettings && (
+            <Alert>
+              <Info className="h-4 w-4" />
+              <AlertDescription>
+                Your previous podcast versions will remain available. You can switch between versions anytime.
+              </AlertDescription>
+            </Alert>
+          )}
+          
           {/* Duration */}
           <div className="space-y-3">
             <Label className="flex items-center gap-2">
@@ -171,6 +183,11 @@ export function PodcastSettingsModal({
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Generating...
+              </>
+            ) : existingSettings ? (
+              <>
+                <Headphones className="mr-2 h-4 w-4" />
+                Generate New Version
               </>
             ) : (
               <>

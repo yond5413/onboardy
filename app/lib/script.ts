@@ -31,6 +31,16 @@ interface OpenRouterResponse {
   }>;
 }
 
+const FALLBACK_MODELS = [
+  'z-ai/glm-4.5-air:free',
+  'arcee-ai/trinity-large-preview:free',
+  'stepfun/step-3.5-flash:free',
+  'cognitivecomputations/dolphin-mistral-24b-venice-edition:free',
+  'openai/gpt-oss-20b:free',
+];
+
+const FINAL_FALLBACK = 'openrouter/free';
+
 const SYSTEM_PROMPTS: Record<PodcastContentStyle, string> = {
   technical: `You are a technical architect creating a podcast script about a software system.
 
@@ -136,41 +146,58 @@ Guidelines:
     },
   ];
 
-  try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': 'http://localhost:3000',
-        'X-Title': 'Repo to Podcast',
-      },
-      body: JSON.stringify({
-        model: 'openai/gpt-oss-20b:free',
-        messages,
-        max_tokens: 2000,
-        temperature: 0.7,
-      }),
-    });
+  const models = [...FALLBACK_MODELS, FINAL_FALLBACK];
+  let lastError = '';
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('[Script] OpenRouter error:', errorText);
-      return '';
+  for (const model of models) {
+    try {
+      console.log(`[Script] Trying model: ${model}`);
+
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+          'HTTP-Referer': 'http://localhost:3000',
+          'X-Title': 'Repo to Podcast',
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          max_tokens: 2000,
+          temperature: 0.7,
+        }),
+      });
+
+      if (!response.ok) {
+        const status = response.status;
+        if (status === 429 || status >= 500) {
+          console.warn(`[Script] Rate limit/server error (${status}) with model ${model}, trying next...`);
+          lastError = `Status ${status}`;
+          continue;
+        }
+        const errorText = await response.text();
+        console.error('[Script] OpenRouter error:', errorText);
+        return '';
+      }
+
+      const data: OpenRouterResponse = await response.json();
+      const script = data.choices[0]?.message?.content?.trim();
+
+      if (!script) {
+        console.warn('[Script] Empty response from OpenRouter');
+        return '';
+      }
+
+      console.log(`[Script] Generated script with ${model}: ${script.length} chars, ~${Math.round(script.split(' ').length / 160)} min`);
+      return script;
+    } catch (error) {
+      console.warn(`[Script] Error with model ${model}:`, error instanceof Error ? error.message : error);
+      lastError = error instanceof Error ? error.message : 'Unknown error';
+      continue;
     }
-
-    const data: OpenRouterResponse = await response.json();
-    const script = data.choices[0]?.message?.content?.trim();
-
-    if (!script) {
-      console.warn('[Script] Empty response from OpenRouter');
-      return '';
-    }
-
-    console.log(`[Script] Generated script: ${script.length} chars, ~${Math.round(script.split(' ').length / 160)} min`);
-    return script;
-  } catch (error) {
-    console.error('[Script] Error generating script:', error);
-    return '';
   }
+
+  console.error('[Script] All models failed, last error:', lastError);
+  return '';
 }

@@ -10,6 +10,19 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
+import { 
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { toast } from 'sonner';
 import { 
   ArrowLeft, 
@@ -30,7 +43,11 @@ import {
   Edit3,
   User,
   AlertTriangle,
-  SkipForward
+  SkipForward,
+  Music,
+  Package,
+  ChevronDown,
+  Settings
 } from 'lucide-react';
 import Link from 'next/link';
 import mermaid from 'mermaid';
@@ -58,6 +75,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+
+interface PodcastVersion {
+  id: string;
+  version: number;
+  settings: PodcastSettings;
+  created_at: string;
+}
 
 interface JobData {
   id: string;
@@ -139,6 +163,9 @@ export default function JobDetailPage() {
   const [selectedArchitectureNode, setSelectedArchitectureNode] = useState<Node<DiagramNodeData> | null>(null);
   const [diagramView, setDiagramView] = useState<'architecture' | 'dataFlow'>('architecture');
   const [retryingStage, setRetryingStage] = useState<string | null>(null);
+  const [podcastVersions, setPodcastVersions] = useState<PodcastVersion[]>([]);
+  const [selectedPodcastVersion, setSelectedPodcastVersion] = useState<number | null>(null);
+  const [currentPodcast, setCurrentPodcast] = useState<{ script: string; audio: string | null } | null>(null);
   const mermaidRef = useRef<HTMLDivElement>(null);
 
   // Initialize mermaid
@@ -156,6 +183,40 @@ export default function JobDetailPage() {
     if (response.ok) {
       const data = await response.json();
       setJob(data);
+    }
+  }, [jobId]);
+
+  // Fetch podcast versions
+  const fetchPodcastVersions = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/jobs/${jobId}/podcast`);
+      if (response.ok) {
+        const data = await response.json();
+        setPodcastVersions(data.podcasts || []);
+        
+        // If we have versions and no version is selected, select the latest
+        if (data.podcasts && data.podcasts.length > 0 && !selectedPodcastVersion) {
+          setSelectedPodcastVersion(data.podcasts[0].version);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch podcast versions:', err);
+    }
+  }, [jobId, selectedPodcastVersion]);
+
+  // Fetch specific podcast version
+  const fetchPodcastVersion = useCallback(async (version: number) => {
+    try {
+      const response = await fetch(`/api/jobs/${jobId}/podcast?version=${version}`);
+      if (response.ok) {
+        const data = await response.json();
+        setCurrentPodcast({
+          script: data.script_content,
+          audio: data.audio_file_path,
+        });
+      }
+    } catch (err) {
+      console.error('Failed to fetch podcast version:', err);
     }
   }, [jobId]);
 
@@ -190,6 +251,20 @@ export default function JobDetailPage() {
 
     return () => clearInterval(interval);
   }, [jobId, job?.status]);
+
+  // Fetch podcast versions when job has script content
+  useEffect(() => {
+    if (job?.script_content) {
+      fetchPodcastVersions();
+    }
+  }, [job?.script_content, fetchPodcastVersions]);
+
+  // Fetch selected podcast version
+  useEffect(() => {
+    if (selectedPodcastVersion) {
+      fetchPodcastVersion(selectedPodcastVersion);
+    }
+  }, [selectedPodcastVersion, fetchPodcastVersion]);
 
   // Render mermaid diagram when tab changes
   useEffect(() => {
@@ -270,13 +345,94 @@ export default function JobDetailPage() {
       }
 
       const data = await response.json();
-      setJob(prev => prev ? { ...prev, script_content: data.script } : null);
-      toast.success('Podcast generated successfully!');
+      setJob(prev => prev ? { 
+        ...prev, 
+        script_content: data.script,
+        audio_file_path: data.audioBase64 ? `data:audio/mpeg;base64,${data.audioBase64}` : null,
+      } : null);
+      
+      // Refresh podcast versions and select the new one
+      await fetchPodcastVersions();
+      setSelectedPodcastVersion(data.version);
+      
+      toast.success(`Podcast version ${data.version} generated successfully!`);
       setActiveTab('script');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to generate podcast');
     } finally {
       setGeneratingPodcast(false);
+    }
+  }
+
+  async function handleExportScript() {
+    const version = selectedPodcastVersion || podcastVersions[0]?.version;
+    if (!version) return;
+    
+    try {
+      const response = await fetch(`/api/jobs/${jobId}/podcast/export?type=script&version=${version}`);
+      if (!response.ok) throw new Error('Export failed');
+      
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `podcast-script-v${version}.txt`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      toast.success('Script downloaded');
+    } catch (err) {
+      toast.error('Failed to download script');
+    }
+  }
+
+  async function handleExportAudio() {
+    const version = selectedPodcastVersion || podcastVersions[0]?.version;
+    if (!version) return;
+    
+    try {
+      const response = await fetch(`/api/jobs/${jobId}/podcast/export?type=audio&version=${version}`);
+      if (!response.ok) throw new Error('Export failed');
+      
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `podcast-audio-v${version}.mp3`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      toast.success('Audio downloaded');
+    } catch (err) {
+      toast.error('Failed to download audio');
+    }
+  }
+
+  async function handleExportBoth() {
+    const version = selectedPodcastVersion || podcastVersions[0]?.version;
+    if (!version) return;
+    
+    try {
+      const response = await fetch(`/api/jobs/${jobId}/podcast/export?type=both&version=${version}`);
+      if (!response.ok) throw new Error('Export failed');
+      
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `podcast-v${version}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      toast.success('Package downloaded');
+    } catch (err) {
+      toast.error('Failed to download package');
     }
   }
 
@@ -701,19 +857,84 @@ export default function JobDetailPage() {
           )}
 
           {/* Audio Player */}
-          {job.audio_file_path && (
+          {(job.audio_file_path || currentPodcast?.audio) && (
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Headphones className="h-5 w-5" />
-                  Podcast Audio
-                </CardTitle>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Headphones className="h-5 w-5" />
+                      Podcast Audio
+                    </CardTitle>
+                    {podcastVersions.length > 0 && selectedPodcastVersion && (
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Version {selectedPodcastVersion} • {
+                          new Date(
+                            podcastVersions.find(v => v.version === selectedPodcastVersion)?.created_at || ''
+                          ).toLocaleDateString()
+                        }
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {podcastVersions.length > 1 && (
+                      <Select
+                        value={selectedPodcastVersion?.toString() || ''}
+                        onValueChange={(value) => setSelectedPodcastVersion(parseInt(value))}
+                      >
+                        <SelectTrigger className="w-[140px]">
+                          <SelectValue placeholder="Select version" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {podcastVersions.map((v) => (
+                            <SelectItem key={v.version} value={v.version.toString()}>
+                              Version {v.version} {v.version === podcastVersions[0].version && '(latest)'}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          <Download className="mr-2 h-4 w-4" />
+                          Export
+                          <ChevronDown className="ml-2 h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={handleExportScript}>
+                          <FileText className="mr-2 h-4 w-4" />
+                          Download Script
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={handleExportAudio}>
+                          <Music className="mr-2 h-4 w-4" />
+                          Download Audio
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={handleExportBoth}>
+                          <Package className="mr-2 h-4 w-4" />
+                          Download Both (ZIP)
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={() => setSettingsModalOpen(true)}
+                      disabled={generatingPodcast}
+                    >
+                      <Settings className="mr-2 h-4 w-4" />
+                      Generate New
+                    </Button>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
                 <audio
                   controls
                   className="w-full"
-                  src={job.audio_file_path}
+                  src={currentPodcast?.audio || job.audio_file_path || ''}
+                  key={selectedPodcastVersion}
                 />
               </CardContent>
             </Card>
@@ -925,15 +1146,78 @@ export default function JobDetailPage() {
             <TabsContent value="script" className="mt-6">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between">
-                  <CardTitle>Podcast Script</CardTitle>
-                  <Button variant="outline" size="sm" onClick={handleDownloadScript}>
-                    <Download className="mr-2 h-4 w-4" />
-                    Download
-                  </Button>
+                  <div>
+                    <CardTitle>Podcast Script</CardTitle>
+                    {podcastVersions.length > 0 && selectedPodcastVersion && (
+                      <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+                        <span>Version {selectedPodcastVersion}</span>
+                        {(() => {
+                          const version = podcastVersions.find(v => v.version === selectedPodcastVersion);
+                          if (version?.settings) {
+                            return (
+                              <>
+                                <span>•</span>
+                                <span>Style: {version.settings.style}</span>
+                                <span>•</span>
+                                <span>Tone: {version.settings.tone}</span>
+                                <span>•</span>
+                                <span>Duration: {version.settings.duration}</span>
+                                <span>•</span>
+                                <span>Audience: {version.settings.audience}</span>
+                              </>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {podcastVersions.length > 1 && (
+                      <Select
+                        value={selectedPodcastVersion?.toString() || ''}
+                        onValueChange={(value) => setSelectedPodcastVersion(parseInt(value))}
+                      >
+                        <SelectTrigger className="w-[140px]">
+                          <SelectValue placeholder="Select version" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {podcastVersions.map((v) => (
+                            <SelectItem key={v.version} value={v.version.toString()}>
+                              Version {v.version} {v.version === podcastVersions[0].version && '(latest)'}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          <Download className="mr-2 h-4 w-4" />
+                          Export
+                          <ChevronDown className="ml-2 h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={handleExportScript}>
+                          <FileText className="mr-2 h-4 w-4" />
+                          Download Script
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={handleExportAudio}>
+                          <Music className="mr-2 h-4 w-4" />
+                          Download Audio
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={handleExportBoth}>
+                          <Package className="mr-2 h-4 w-4" />
+                          Download Both (ZIP)
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   <pre className="whitespace-pre-wrap font-mono text-sm bg-muted p-4 rounded-lg">
-                    {job.script_content}
+                    {currentPodcast?.script || job.script_content}
                   </pre>
                 </CardContent>
               </Card>
@@ -1018,7 +1302,11 @@ export default function JobDetailPage() {
                 onOpenChange={setSettingsModalOpen}
                 onGenerate={handleGeneratePodcast}
                 isGenerating={generatingPodcast}
-                existingSettings={job.podcast_settings}
+                existingSettings={
+                  podcastVersions.length > 0 
+                    ? podcastVersions[0].settings 
+                    : job.podcast_settings
+                }
               />
             </DialogContent>
           </Dialog>
