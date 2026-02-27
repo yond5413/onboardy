@@ -1,0 +1,29 @@
+name = "onboardy-analyzer"
+workspace = "columbia-158966"
+type = "agent"
+public = false
+
+[runtime]
+timeout = 900
+memory = 2048
+
+[[triggers]]
+  id = "trigger-analyze"
+  type = "http"
+[triggers.configuration]
+  path = "agents/onboardy-analyzer/analyze"
+  retry = 1
+
+[[triggers]]
+  id = "trigger-diagram"
+  type = "http"
+[triggers.configuration]
+  path = "agents/onboardy-analyzer/diagram"
+  retry = 1
+
+[[triggers]]
+  id = "trigger-chat"
+  type = "http"
+[triggers.configuration]
+  path = "agents/onboardy-analyzer/chat"
+  retry = 1
