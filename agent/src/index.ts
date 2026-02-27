@@ -1,5 +1,6 @@
 import "@blaxel/telemetry";
 import express, { Request, Response } from "express";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { SandboxInstance } from "@blaxel/core";
 import { analyzeRepo, generateDiagram, chatWithRepo } from "./agent.js";
 
@@ -36,11 +37,77 @@ app.get("/env", (_req: Request, res: Response) => {
   });
 });
 
+/**
+ * Debug endpoint - returns diagnostic info for troubleshooting Claude Agent SDK issues.
+ * Use GET /debug for env/runtime info, POST /debug/test to run a minimal SDK query (no MCP).
+ */
+app.get("/debug", (_req: Request, res: Response) => {
+  const variables: Record<string, { set: boolean; length?: number }> = {};
+  for (const varName of REQUIRED_ENV_VARS) {
+    const val = process.env[varName];
+    variables[varName] = { set: !!val, ...(val && { length: val.length }) };
+  }
+
+  res.json({
+    timestamp: new Date().toISOString(),
+    nodeVersion: process.version,
+    platform: process.platform,
+    arch: process.arch,
+    cwd: process.cwd(),
+    env: variables,
+    IS_SANDBOX: process.env.IS_SANDBOX,
+  });
+});
+
+app.post("/debug/test", async (_req: Request, res: Response) => {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(400).json({
+      success: false,
+      error: "ANTHROPIC_API_KEY not set",
+    });
+  }
+
+  try {
+    let response = "";
+    for await (const message of query({
+      prompt: "Reply with exactly: Hello from Claude Agent SDK",
+      options: {
+        model: "claude-haiku-4-5-20251001",
+        maxTurns: 1,
+        mcpServers: {},
+        tools: [],
+        allowedTools: [],
+        permissionMode: "bypassPermissions",
+        debug: true,
+        debugFile: "/tmp/claude-debug-test.log",
+      },
+    })) {
+      if (message.type === "result" && (message as { result?: string }).result) {
+        response = (message as { result: string }).result;
+        break;
+      }
+    }
+
+    res.json({
+      success: true,
+      response,
+      message: "Minimal SDK query (no MCP) completed successfully",
+    });
+  } catch (error) {
+    console.error("[Debug] SDK test error:", error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+  }
+});
+
 // Fallback middleware: if Blaxel strips the sub-path, rewrite URL based on body.action
 app.use((req: Request, _res: Response, next: express.NextFunction) => {
   if (req.method === 'POST' && req.path === '/' && req.body?.action) {
     const action = req.body.action as string;
-    if (['analyze', 'diagram', 'chat'].includes(action)) {
+    if (['analyze', 'diagram', 'chat', 'debug/test'].includes(action)) {
       console.log(`[Router] Rewriting POST / with action=${action} to /${action}`);
       req.url = `/${action}`;
     }
@@ -50,11 +117,10 @@ app.use((req: Request, _res: Response, next: express.NextFunction) => {
 
 app.post("/analyze", async (req: Request, res: Response) => {
   const { sandboxName, prompt, systemPrompt, model, jobId } = req.body;
-  const apiKey = req.headers['x-anthropic-key'] as string || process.env.ANTHROPIC_API_KEY;
 
-  console.log('[Analyze] API key from header:', apiKey ? `YES (${apiKey.substring(0, 8)}...)` : 'NO');
   console.log('[Analyze] Sandbox:', sandboxName);
   console.log('[Analyze] JobId:', jobId);
+  console.log('[Analyze] ANTHROPIC_API_KEY set:', !!process.env.ANTHROPIC_API_KEY);
 
   if (!sandboxName || !prompt) {
     return res.status(400).json({ error: "sandboxName and prompt are required" });
@@ -70,9 +136,8 @@ app.post("/analyze", async (req: Request, res: Response) => {
     for await (const event of analyzeRepo(sandbox, {
       prompt,
       systemPrompt: systemPrompt || SYSTEM_PROMPT,
-      model: model || "claude-haiku-4-5",
+      model: model || "claude-haiku-4-5-20251001",
       jobId: jobId || "unknown",
-      apiKey,
     })) {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     }
@@ -87,7 +152,9 @@ app.post("/analyze", async (req: Request, res: Response) => {
 
 app.post("/diagram", async (req: Request, res: Response) => {
   const { sandboxName, prompt, systemPrompt, model, jobId } = req.body;
-  const apiKey = req.headers['x-anthropic-key'] as string || process.env.ANTHROPIC_API_KEY;
+
+  console.log('[Diagram] Sandbox:', sandboxName);
+  console.log('[Diagram] JobId:', jobId);
 
   if (!sandboxName || !prompt) {
     return res.status(400).json({ error: "sandboxName and prompt are required" });
@@ -102,9 +169,8 @@ app.post("/diagram", async (req: Request, res: Response) => {
     for await (const event of generateDiagram(sandbox, {
       prompt,
       systemPrompt: systemPrompt || SYSTEM_PROMPT,
-      model: model || "claude-haiku-4-5",
+      model: model || "claude-haiku-4-5-20251001",
       jobId: jobId || "unknown",
-      apiKey,
     })) {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     }
@@ -119,7 +185,8 @@ app.post("/diagram", async (req: Request, res: Response) => {
 
 app.post("/chat", async (req: Request, res: Response) => {
   const { sandboxName, messages, systemPrompt, model, context, graphContext } = req.body;
-  const apiKey = req.headers['x-anthropic-key'] as string || process.env.ANTHROPIC_API_KEY;
+
+  console.log('[Chat] Sandbox:', sandboxName);
 
   if (!sandboxName || !messages) {
     return res.status(400).json({ error: "sandboxName and messages are required" });
@@ -134,10 +201,9 @@ app.post("/chat", async (req: Request, res: Response) => {
     for await (const event of chatWithRepo(sandbox, {
       messages,
       systemPrompt,
-      model: model || "claude-haiku-4-5",
+      model: model || "claude-haiku-4-5-20251001",
       context,
       graphContext,
-      apiKey,
     })) {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     }

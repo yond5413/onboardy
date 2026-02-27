@@ -5,7 +5,10 @@ public = false
 
 [runtime]
 timeout = 900
-memory = 2048
+memory = 4096
+
+[env]
+IS_SANDBOX = "1"
 
 [[triggers]]
   id = "trigger-analyze"
@@ -27,3 +30,17 @@ memory = 2048
 [triggers.configuration]
   path = "agents/onboardy-analyzer/chat"
   retry = 1
+
+[[triggers]]
+  id = "trigger-debug"
+  type = "http"
+[triggers.configuration]
+  path = "agents/onboardy-analyzer/debug"
+  retry = 0
+
+[[triggers]]
+  id = "trigger-debug-test"
+  type = "http"
+[triggers.configuration]
+  path = "agents/onboardy-analyzer/debug/test"
+  retry = 0

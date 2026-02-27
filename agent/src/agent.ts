@@ -7,7 +7,6 @@ export interface AnalyzeOptions {
   systemPrompt: string;
   model: string;
   jobId: string;
-  apiKey?: string;
 }
 
 export interface DiagramOptions {
@@ -15,7 +14,6 @@ export interface DiagramOptions {
   systemPrompt: string;
   model: string;
   jobId: string;
-  apiKey?: string;
 }
 
 export interface ChatOptions {
@@ -23,7 +21,6 @@ export interface ChatOptions {
   systemPrompt?: string;
   model: string;
   context?: string;
-  apiKey?: string;
   graphContext?: {
     nodeId?: string;
     nodeLabel?: string;
@@ -60,14 +57,20 @@ export async function* analyzeRepo(
   sandbox: SandboxInstance,
   options: AnalyzeOptions
 ): AsyncGenerator<Record<string, unknown>> {
-  // Set env var from header for SDK to use
-  if (options.apiKey) {
-    process.env.ANTHROPIC_API_KEY = options.apiKey;
-  }
-  
   const mcpUrl = `${sandbox.metadata?.url}/mcp`;
-  const apiKey = options.apiKey || process.env.BL_API_KEY;
   const jobId = options.jobId;
+  
+  console.log('[Debug] ========== ANALYSIS START ==========');
+  console.log('[Debug] Sandbox ID:', (sandbox as unknown as { id?: string }).id);
+  console.log('[Debug] Sandbox metadata:', JSON.stringify(sandbox.metadata, null, 2));
+  console.log('[Debug] MCP URL:', mcpUrl);
+  console.log('[Debug] ANTHROPIC_API_KEY present:', !!process.env.ANTHROPIC_API_KEY);
+  console.log('[Debug] Model:', options.model);
+  console.log('[Debug] Job ID:', jobId);
+  
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('ANTHROPIC_API_KEY environment variable is required');
+  }
   
   await updateJobProgress({
     job_id: jobId,
@@ -90,6 +93,10 @@ export async function* analyzeRepo(
   let rawOutput = '';
   let progress = 0;
 
+  const mcpHeaders = process.env.BL_API_KEY
+    ? { Authorization: `Bearer ${process.env.BL_API_KEY}` }
+    : undefined;
+
   try {
     for await (const message of query({
       prompt: options.prompt,
@@ -100,16 +107,23 @@ export async function* analyzeRepo(
           sandbox: {
             type: "http",
             url: mcpUrl,
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-            },
+            ...(mcpHeaders && { headers: mcpHeaders }),
           },
         },
         tools: [],
-        allowedTools: [],
+        allowedTools: [
+          'mcp__sandbox__codegenListDir',
+          'mcp__sandbox__codegenGrepSearch',
+          'mcp__sandbox__codegenFileSearch',
+          'mcp__sandbox__codegenReadFileRange',
+          'mcp__sandbox__fsReadFile',
+          'mcp__sandbox__fsListDirectory',
+        ],
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
         maxTurns: 50,
+        debug: true,
+        debugFile: "/tmp/claude-debug.log",
       },
     })) {
       if (message.type === 'assistant' && message.message?.content) {
@@ -198,6 +212,11 @@ export async function* analyzeRepo(
     });
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : '';
+    console.error('[Debug] ========== ANALYSIS ERROR ==========');
+    console.error('[Debug] Error message:', errorMsg);
+    console.error('[Debug] Error stack:', errorStack);
+    
     yield {
       type: 'error',
       error: errorMsg,
@@ -222,14 +241,23 @@ export async function* generateDiagram(
   sandbox: SandboxInstance,
   options: DiagramOptions
 ): AsyncGenerator<Record<string, unknown>> {
-  // Set env var from header for SDK to use
-  if (options.apiKey) {
-    process.env.ANTHROPIC_API_KEY = options.apiKey;
-  }
-  
   const mcpUrl = `${sandbox.metadata?.url}/mcp`;
-  const apiKey = options.apiKey || process.env.BL_API_KEY;
   
+  console.log('[Debug] ========== DIAGRAM START ==========');
+  console.log('[Debug] Sandbox metadata:', JSON.stringify(sandbox.metadata, null, 2));
+  console.log('[Debug] MCP URL:', mcpUrl);
+  console.log('[Debug] ANTHROPIC_API_KEY present:', !!process.env.ANTHROPIC_API_KEY);
+  console.log('[Debug] Model:', options.model);
+  console.log('[Debug] Job ID:', options.jobId);
+  
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('ANTHROPIC_API_KEY environment variable is required');
+  }
+
+  const mcpHeaders = process.env.BL_API_KEY
+    ? { Authorization: `Bearer ${process.env.BL_API_KEY}` }
+    : undefined;
+
   let rawOutput = '';
   let jsonStr = '';
 
@@ -243,15 +271,22 @@ export async function* generateDiagram(
           sandbox: {
             type: "http",
             url: mcpUrl,
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-            },
+            ...(mcpHeaders && { headers: mcpHeaders }),
           },
         },
         tools: [],
-        allowedTools: [],
+        allowedTools: [
+          'mcp__sandbox__codegenListDir',
+          'mcp__sandbox__codegenGrepSearch',
+          'mcp__sandbox__codegenFileSearch',
+          'mcp__sandbox__codegenReadFileRange',
+          'mcp__sandbox__fsReadFile',
+          'mcp__sandbox__fsListDirectory',
+        ],
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
+        debug: true,
+        debugFile: "/tmp/claude-debug.log",
       },
     })) {
       if (message.type === 'assistant' && message.message?.content) {
@@ -301,13 +336,11 @@ export async function* chatWithRepo(
   sandbox: SandboxInstance,
   options: ChatOptions
 ): AsyncGenerator<Record<string, unknown>> {
-  // Set env var from header for SDK to use
-  if (options.apiKey) {
-    process.env.ANTHROPIC_API_KEY = options.apiKey;
-  }
-  
   const mcpUrl = `${sandbox.metadata?.url}/mcp`;
-  const apiKey = options.apiKey || process.env.BL_API_KEY;
+  
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error('ANTHROPIC_API_KEY environment variable is required');
+  }
   
   let finalResponse = '';
   const contextFiles: string[] = [];
@@ -339,6 +372,10 @@ export async function* chatWithRepo(
     ? `${historyPrompt}\n\n${formatGraphContext(options.graphContext)}`
     : `${formatGraphContext(options.graphContext)}User: ${lastUserMessage}`;
 
+  const mcpHeaders = process.env.BL_API_KEY
+    ? { Authorization: `Bearer ${process.env.BL_API_KEY}` }
+    : undefined;
+
   try {
     for await (const message of query({
       prompt: fullPrompt,
@@ -349,14 +386,15 @@ export async function* chatWithRepo(
           sandbox: {
             type: "http",
             url: mcpUrl,
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-            },
+            ...(mcpHeaders && { headers: mcpHeaders }),
           },
         },
+        tools: [],
         allowedTools: SANDBOX_ALLOWED_TOOLS,
         permissionMode: 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
+        debug: true,
+        debugFile: "/tmp/claude-debug.log",
       },
     })) {
       if (message.type === 'assistant' && message.message?.content) {

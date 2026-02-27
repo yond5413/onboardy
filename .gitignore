@@ -47,4 +47,5 @@ yarn-error.log*
 next-env.d.ts
 
 *.png
-blaxel-agent/
+agent/dist
+agent/node_modules
